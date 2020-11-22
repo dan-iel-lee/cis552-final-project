@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0e11f0df2f4795aa2d50d9601dcbb1ae0855351ed9d0d06e6f68d085c30b8630
+-- hash: 77fb6b676185d45d79640194168f00c39ba312672924fb03d9670f9b7652803d
 
 name:           project-cis552
 version:        0.1.0.0
@@ -27,7 +27,11 @@ source-repository head
 
 library
   exposed-modules:
+      Eval
       Lib
+      Parser
+      ParserCombinators
+      TypeInf
   other-modules:
       Paths_project_cis552
   hs-source-dirs:

@@ -1,0 +1,14 @@
+
+data T1 = L Bool | R Int
+
+-- TC "T1" []
+
+
+-- "L" -> DC "L" [Bool]
+-- "R" -> DC "R" [Int]
+
+ex1 = L True 
+
+case ex1 of 
+  L b -> b 
+  R i -> i >= 0

@@ -1,0 +1,9 @@
+
+
+y = fun x -> x
+
+y 3
+
+
+let y = fun x -> x
+  in y 3

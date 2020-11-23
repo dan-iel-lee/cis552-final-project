@@ -29,6 +29,7 @@ Lastly, you can start a REPL with `stack ghci`.
 - user defined types (inductive?) \*\*\*
 - GADTs
 - Type class constraints
+- mutual recursion
 
 Monad
 
@@ -47,3 +48,61 @@ f (Just 1)
 - Higher rank polymorphism
 - type families
 -
+
+
+
+## Questions
+- Do we need to do kind checking?
+
+
+## Testing
+
+
+
+## Order of stuff
+- [ ] type annotations
+- quickcheck Property: if valid ~ runs after n steps
+- 
+
+### Checkpoint 2
+- Parser
+- Type annotations
+- User defined types (non-recursive, * kinded)
+  - hopefully: also * -> * kinded
+
+
+
+### Type classes
+
+
+```haskell
+data Weird = W (Weird -> Weird)
+data Fix f = Fix (f (Fix f)) -- (* -> *) -> *
+
+
+
+Weird -> Weird
+(\ (W x) -> x (W x))
+
+\x -> case x of 
+  (W a) -> a x
+
+x : A
+a : Weird -> Weird
+
+
+inc :: Functor f => f Int -> F int
+inc x = fmap (+ 1) x
+
+inc :: forall f :: * -> * . Functor f -> f Int -> f int
+inc dict x = dict.fmap (+ 1) x
+
+
+type Functor f = 
+  { fmap :: forall a b . a -> b -> f a -> f b }
+
+```
+
+
+
+

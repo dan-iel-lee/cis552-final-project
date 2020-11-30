@@ -44,7 +44,6 @@ char c = P.satisfy (== c)
 parenP :: P.Parser a -> P.Parser a
 parenP p = char '(' *> p <* char ')'
 
--- ======================
 -- DATATYPE PARSING
 -- =====================
 
@@ -55,6 +54,14 @@ exprParser :: String -> P.Parser Expression
 -- DECLARATION PARSING
 -- ========================
 
+-- x = 3 => let x = 3
+{-
+x = 3
+
+y = fun X -> X
+
+y x
+ -}
 data Declaration = Dec Variable Expression
 
 decParser :: String -> P.Parser Declaration
@@ -235,7 +242,6 @@ quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
 
 instance Arbitrary Expression where
   arbitrary = sized genExp
-
   shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
   shrink (If e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
   shrink (Fun v e1) = [Fun v e1' | e1' <- shrink e1]

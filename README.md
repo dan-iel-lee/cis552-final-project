@@ -3,6 +3,17 @@
 This is the initial README file for your project. You should update it as you
 see fit.
 
+
+## TODO
+- Parsing 
+  - [ ] update existing test cases with new syntax
+  - [ ] test cases for Datatype parsing and Declaration parsing
+- Type checking
+  - [ ] write test cases with examples
+- Evaluator
+  - [ ] quickcheck property for running after N steps
+
+
 ## Building, running, and testing
 
 This project compiles with `stack build`. You can add any needed dependencies
@@ -63,7 +74,6 @@ f (Just 1)
 - [ ] type annotations
 - quickcheck Property: if valid ~ runs after n steps
 - 
-
 ### Checkpoint 2
 - Parser
 - Type annotations

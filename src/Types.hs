@@ -13,21 +13,25 @@ data Type
   | VarTy TypeVariable
   | -- for user defined types
     TypeC TypeConstructor [Type]
+  deriving (Show, Eq)
 
 {- for later -}
 data Kind
   = Star
   | Arrow Kind
+  deriving (Show, Eq)
 
 -- List (Arrow Star) Star -> Star (* -> *) -> *
 
 data TypeConstructor = TC {getTCName :: String, getKind :: Kind}
+  deriving (Show, Eq)
 
 -- EXPRESSION LEVEL
 -- ==============================
 
 -- NOTE: can defer this to type checking
 data DataConstructor = DC {getDCName :: String, getType :: [Type]} -- uppercase
+  deriving (Show, Eq)
 
 -- type DataConstructor = String
 
@@ -38,6 +42,7 @@ data Pattern
   | VarP Variable
   | IntP Int
   | BoolP Bool
+  deriving (Show, Eq)
 
 -- primitive binary operators (for now)
 data Bop
@@ -52,18 +57,22 @@ data Bop
 
 type Variable = String -- lowercase
 
-data Expression
+data AppHead
   = Var Variable
-  | -- primitives
-    IntExp Int
+  | Expr Expression
+  | Annot Expression Type
+  deriving (Show, Eq)
+
+data Expression
+  = IntExp Int
   | BoolExp Bool
   | Op Bop Expression Expression
   | -- constructors
     Case Expression [(Pattern, Expression)]
   | C DataConstructor
   | Lam Variable Expression
-  | App Expression Expression
+  | App AppHead [Expression] -- ((s e1) e2) e3
   | Let Variable Expression Expression
-  | Annot Expression Type --
+  deriving (Show, Eq)
 
--- type annotations
+-- Annot Expression Type --

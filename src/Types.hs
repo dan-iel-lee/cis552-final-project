@@ -9,7 +9,7 @@ type TypeVariable = Char
 data Type
   = IntTy
   | BoolTy
-  | Fun Type Type
+  | FunTy Type Type
   | VarTy TypeVariable
   | -- for user defined types
     TypeC TypeConstructor [Type]

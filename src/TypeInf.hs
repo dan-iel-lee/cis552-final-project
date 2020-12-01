@@ -1,9 +1,22 @@
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_GHC -Wincomplete-patterns #-}
 
 module TypeInf where
 
+{-
+
+Done
+- type checking/inference for Vars, lambdas, and applications
+- mgu for quick look
+- figure out substitutions
+
+Next up
+- instantiation judgement
+
+-}
 -- import Parser
 
 import Control.Monad.Except
@@ -13,7 +26,7 @@ import Control.Monad.Writer
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
-import Data.Set (Set)
+import Data.Set (Set, fromList)
 import Test.HUnit
 import Types
 
@@ -35,35 +48,61 @@ type TcMonad a =
     a
 
 -- // TODO: extract out common substitution patterns
-class Substible t where
-  data Substy t
-  after :: Substy t -> Substy t -> Substy t
-  subst :: Substy t -> a -> Substy t
+class Substible v t where
+  data Substy v t :: *
+
+  after :: Substy v t -> Substy v t -> Substy v t
+  s1 `after` s2 = smap s1 s2 `union` s1
+  smap :: Substy v t -> Substy v t -> Substy v t
+  union :: Substy v t -> Substy v t -> Substy v t
+  subst :: Substy v t -> Type -> t
+  substS :: Substy v t -> Scheme -> Scheme
+
+instance Substible InstVariable Scheme where
+  data Substy InstVariable Scheme = SSubst (Map InstVariable Scheme) deriving (Show, Eq)
+  smap s (SSubst s1) = SSubst $ Map.map (substS s) s1
+  union (SSubst s1) (SSubst s2) = SSubst (s1 `Map.union` s2)
+
+  subst (SSubst s) t@(IVarTy a) = fromMaybe (rho t) (Map.lookup a s)
+  subst s (RFunTy s1 s2) = rho $ RFunTy (substS s s1) (substS s s2)
+  subst _ t@(Tau _) = rho t
+
+  substS s (Forall vs t) =
+    let Forall ys resTy = subst s t
+     in Forall (vs ++ ys) resTy
+
+-- substS
+
+instance Substible InstVariable Type where
+  data Substy InstVariable Type = PSubst (Map InstVariable Type) deriving (Show, Eq)
+  smap s (PSubst s1) = PSubst $ Map.map (subst s) s1
+  union (PSubst s1) (PSubst s2) = PSubst (s1 `Map.union` s2)
+
+  subst (PSubst s) t@(IVarTy a) = fromMaybe t (Map.lookup a s)
+  subst s (RFunTy s1 s2) = RFunTy (substS s s1) (substS s s2)
+  subst _ t@(Tau _) = t
+
+  substS s (Forall vs t) =
+    let resTy = subst s t
+     in Forall vs resTy
 
 newtype Substitution = Subst (Map TypeVariable MonoType) deriving (Show, Eq)
 
-newtype MonoSubst = MSubst (Map InstVariable MonoType) deriving (Show, Eq)
+-- afterPoly :: PolySubst -> PolySubst -> PolySubst
+-- SSubst s1 `afterPoly` SSubst s2 = SSubst $ Map.map (subst (SSubst s1)) s2 `Map.union` s1
 
-newtype PolySubst = PSubst (Map InstVariable Scheme) deriving (Show, Eq)
-
-afterPoly :: PolySubst -> PolySubst -> PolySubst
-PSubst s1 `afterPoly` PSubst s2 = PSubst $ Map.map (substPoly (PSubst s1)) s2 `Map.union` s1
-
-substPolyHelper :: PolySubst -> Type -> Scheme
-substPolyHelper (PSubst s) t@(IVarTy a) = fromMaybe (Rho t) (Map.lookup a s)
-substPolyHelper s (RFunTy s1 s2) = Rho $ RFunTy (substPoly s s1) (substPoly s s2)
-substPolyHelper _ t@(Tau _) = Rho t
-
-substPoly :: PolySubst -> Scheme -> Scheme
-substPoly s t = substPolyHelper s (strip t)
+-- substHelper :: Substy Scheme -> Type -> Scheme
+-- substHelper (SSubst s) t@(IVarTy a) = fromMaybe (Rho t) (Map.lookup a s)
+-- substHelper s (RFunTy s1 s2) = Rho $ RFunTy (subst s s1) (subst s s2)
+-- substHelper _ t@(Tau _) = Rho t
 
 -- substitute out all instantiation variables for fresh unification (type) variables
-genFreshInnerSubst :: [InstVariable] -> TcMonad MonoSubst
-genFreshInnerSubst [] = return (MSubst Map.empty)
+genFreshInnerSubst :: [InstVariable] -> TcMonad (Substy InstVariable Type)
+genFreshInnerSubst [] = return (PSubst Map.empty)
 genFreshInnerSubst (x : xs) = do
-  MSubst res <- genFreshInnerSubst xs
+  PSubst res <- genFreshInnerSubst xs
   a <- fresh
-  return $ MSubst (Map.insert x (VarTy a) res)
+  return $ PSubst (Map.insert x (Tau $ VarTy a) res)
 
 -- HELPERS
 
@@ -73,6 +112,13 @@ fresh = do
   s <- get
   put $ succ s
   return s
+
+freshIV :: InstMonad InstVariable
+freshIV = do
+  -- // TODO: combine with fresh
+  (IV s) <- get
+  put $ IV (succ s)
+  return (IV s)
 
 -- | Checks if two types are equal
 equate :: MonoType -> MonoType -> TcMonad ()
@@ -101,13 +147,11 @@ genConstraints = undefined
 -- JUDGEMENTS
 -- 1. check type
 checkGen :: TypeEnv -> Expression -> Scheme -> TcMonad ()
-checkGen (TE es as) e (Forall a s) =
-  case s of
-    Rho p -> checkType newEnv e p
-    _ -> checkGen newEnv e s
+checkGen (TE es as) e (Forall vs t) = checkType newEnv e t
   where
-    newEnv = TE es (a : as)
-checkGen env e (Rho p) = checkType env e p
+    newEnv = TE es (as ++ vs)
+
+-- checkGen env e (rho p) = checkType env e p
 
 checkType :: TypeEnv -> Expression -> Type -> TcMonad ()
 -- LAMBDA CASES
@@ -130,13 +174,13 @@ checkType env (App h es) rho = do
   -- unify with the expected type
   sub1 <- sinkScheme2 mguQL resTy rho
   -- perform substitutinos
-  let argTys' = map (substPoly sub1) argTys
-      resTy' = substPoly sub1 (Rho resTy)
+  let argTys' = map (substS sub1) argTys
+      resTy' = subst sub1 resTy
       -- generate a substitution to get rid of instantiation vars
       stripped = map strip (resTy' : argTys')
   sub2 <- genFreshInnerSubst (fivs stripped)
   -- generate the requisite constraints for the argument types
-  forM_ (zip es argTys') (\(e, t) -> checkGen env e (substPoly sub2 t))
+  forM_ (zip es argTys') (\(e, t) -> checkGen env e (liftRtoS (subst sub2) t))
 -- // TODO: all other types of types
 checkType _ _ _ = error "IMPLEMENT BRO"
 
@@ -156,8 +200,8 @@ inferType env (App h es) = do
   let stripped = map strip argTys ++ [resTy]
   sub <- genFreshInnerSubst (fivs stripped)
   -- generate the requisite constraints for the argument types
-  forM_ (zip es argTys) (\(e, t) -> checkGen env e (substPoly sub t))
-  return $ substPoly sub resTy
+  forM_ (zip es argTys) (\(e, t) -> checkGen env e (liftRtoS (subst sub) t))
+  return $ subst sub resTy
 -- // TODO: all other types of types
 inferType _ _ = error "Unimplemented"
 
@@ -166,23 +210,45 @@ inferTypeHead env (Var v) = tLookup v (getExpVars env)
 inferTypeHead env (Annot e t) = do
   checkGen env e t
   return t
-inferTypeHead env (Expr e) = Rho <$> inferType env e
+inferTypeHead env (Expr e) = rho <$> inferType env e
 
 -- 3. instantiate
+-- need to keep track of instantiation vars
+-- a partially applied TcMonad
+type TcMonad' =
+  WriterT
+    [Constraint] -- gathered constraints
+    ( StateT
+        TypeVariable -- generator for new type variables
+        (Either String) -- error messages (for unbound variables)
+    )
+
+type InstMonad a = StateT InstVariable TcMonad' a
+
 instantiate :: TypeEnv -> Scheme -> [Expression] -> TcMonad ([Scheme], Type)
-instantiate = undefined
+instantiate env sTy es = do
+  (_, sTys, ty) <- evalStateT (instantiateAux env sTy es) (IV 'K')
+  return (sTys, ty)
+
+instantiateAux :: TypeEnv -> Scheme -> [Expression] -> InstMonad (Substy InstVariable Scheme, [Scheme], Type)
+-- IALL
+instantiateAux env (Forall (v : vs) ty) es = do
+  iv <- freshIV
+  -- let sub = PSubst (Map.singleton v iv)
+  -- instantiateAux env
+  return undefined
 
 -- 4. unification
-mguQLRho :: Type -> Type -> TcMonad PolySubst
-mguQLRho t1 (IVarTy v) = return $ PSubst (Map.singleton v (Rho t1))
-mguQLRho (IVarTy v) t2 = return $ PSubst (Map.singleton v (Rho t2))
+mguQLRho :: Type -> Type -> TcMonad (Substy InstVariable Scheme)
+mguQLRho t1 (IVarTy v) = return $ SSubst (Map.singleton v (rho t1))
+mguQLRho (IVarTy v) t2 = return $ SSubst (Map.singleton v (rho t2))
 mguQLRho (RFunTy s1 s2) (RFunTy t1 t2) = do
   sub1 <- mguQL s1 t1
-  sub2 <- mguQL (substPoly sub1 s2) (substPoly sub1 t2)
-  return $ sub1 `afterPoly` sub2
-mguQLRho _ _ = return $ PSubst Map.empty
+  sub2 <- mguQL (substS sub1 s2) (substS sub1 t2)
+  return $ sub1 `after` sub2
+mguQLRho _ _ = return $ SSubst Map.empty
 
-mguQL :: Scheme -> Scheme -> TcMonad PolySubst
+mguQL :: Scheme -> Scheme -> TcMonad (Substy InstVariable Scheme)
 mguQL s1 s2 = mguQLRho (strip s1) (strip s2) -- // TODO: prevent variable escapture
 
 --

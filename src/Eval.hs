@@ -23,6 +23,28 @@ instance Show Value where
 evalB :: Bop -> Value -> Value -> Either String Value
 vLookup :: Variable -> Map Variable Value -> Either String Value
 eval :: Expression -> Environment -> Either String Value
+evalBounded :: Expression -> Environment -> Either (Environment, Expression) (Either String Value)
+{-
+
+let x = 4 in
+let y = x in
+  y + x
+=>
+
+let y = 4 in
+  y + 4
+
+=>
+4 + 4
+
+=>
+8
+
+App f e
+
+-}
+
+-- boundedStep :: Int -> Block -> State Store Block
 -- Testing code
 
 isErr :: Either String Value -> Test
@@ -58,3 +80,16 @@ tests =
     ]
 
 -- quickcheck property
+-- Can be evaluated property
+prop_stepExec :: Expression -> Property
+prop_stepExec e =
+  isValid e ==> not (isError e1)
+  where
+    x = evalBounded e Map.empty
+
+    isError :: Either (Environment, Expression) (Either String Value) -> Bool
+    isError (Right (Left _)) = True
+    isError _ = False
+
+quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
+quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}

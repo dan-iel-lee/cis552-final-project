@@ -2,24 +2,65 @@ module Types where
 
 -- TYPE LEVEL
 -- ==============================
+-- TC "List" (* -> *)
 type TypeVariable = Char
 
--- TC "List" (* -> *)
+newtype InstVariable = IV Char
+  deriving (Show, Eq, Ord)
 
+-- monotypes
+data MonoType
+  = IntTy -- i.e. 'Int'
+  | BoolTy -- i.e. 'Bool'
+  | FunTy MonoType MonoType -- i.e. t1 -> t2
+  | VarTy TypeVariable -- we'll get to this later
+  deriving (Eq, Show)
+
+-- top level mono
 data Type
-  = IntTy
-  | BoolTy
-  | FunTy Type Type
-  | VarTy TypeVariable
-  | -- for user defined types
-    TypeC TypeConstructor [Type]
+  = IVarTy InstVariable -- instantiation variable
+  | RFunTy Scheme Scheme
+  | Tau MonoType
   deriving (Show, Eq)
+
+-- top level poly
+data Scheme
+  = Forall TypeVariable Scheme
+  | Rho Type
+  deriving (Show, Eq)
+
+-- lift a Type function to a Scheme function
+liftScheme :: (Type -> Type) -> Scheme -> Scheme
+liftScheme f (Forall v s) = Forall v (liftScheme f s)
+liftScheme f (Rho t) = Rho $ f t
+
+-- "sink" a function which takes Schemes to a function which takes Types
+sinkScheme :: (Scheme -> a) -> Type -> a
+sinkScheme f t = f (Rho t)
+
+sinkScheme2 :: (Scheme -> Scheme -> a) -> Type -> Type -> a
+sinkScheme2 f t1 t2 = f (Rho t1) (Rho t2)
 
 {- for later -}
 data Kind
   = Star
   | Arrow Kind
   deriving (Show, Eq)
+
+-- HELPER FUNCS
+
+-- create a unification variable, wrapped in a Rho Type
+rVar :: TypeVariable -> Type
+rVar = Tau . VarTy
+
+-- create a unification variable, wrapped in a Scheme
+sVar :: TypeVariable -> Scheme
+sVar = Rho . rVar
+
+-- strip a Scheme
+strip :: Scheme -> Type
+strip (Rho t) = t
+strip (Forall _ s) = strip s
 
 -- List (Arrow Star) Star -> Star (* -> *) -> *
 
@@ -60,7 +101,7 @@ type Variable = String -- lowercase
 data AppHead
   = Var Variable
   | Expr Expression
-  | Annot Expression Type
+  | Annot Expression Scheme
   deriving (Show, Eq)
 
 data Expression

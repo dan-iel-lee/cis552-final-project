@@ -3,16 +3,15 @@
 This is the initial README file for your project. You should update it as you
 see fit.
 
-
 ## TODO
-- Parsing 
-  - [ ] update existing test cases with new syntax
-  - [ ] test cases for Datatype parsing and Declaration parsing
+
+- Parsing
+  - [x] update existing test cases with new syntax
+  - [x] test cases for Datatype parsing and Declaration parsing
 - Type checking
   - [ ] write test cases with examples
 - Evaluator
   - [ ] quickcheck property for running after N steps
-
 
 ## Building, running, and testing
 
@@ -60,30 +59,26 @@ f (Just 1)
 - type families
 -
 
-
-
 ## Questions
-- Do we need to do kind checking?
 
+- Do we need to do kind checking?
 
 ## Testing
 
-
-
 ## Order of stuff
+
 - [ ] type annotations
 - quickcheck Property: if valid ~ runs after n steps
-- 
+-
+
 ### Checkpoint 2
+
 - Parser
 - Type annotations
-- User defined types (non-recursive, * kinded)
-  - hopefully: also * -> * kinded
-
-
+- User defined types (non-recursive, \* kinded)
+  - hopefully: also _ -> _ kinded
 
 ### Type classes
-
 
 ```haskell
 data Weird = W (Weird -> Weird)
@@ -94,7 +89,7 @@ data Fix f = Fix (f (Fix f)) -- (* -> *) -> *
 Weird -> Weird
 (\ (W x) -> x (W x))
 
-\x -> case x of 
+\x -> case x of
   (W a) -> a x
 
 x : A
@@ -108,11 +103,7 @@ inc :: forall f :: * -> * . Functor f -> f Int -> f int
 inc dict x = dict.fmap (+ 1) x
 
 
-type Functor f = 
+type Functor f =
   { fmap :: forall a b . a -> b -> f a -> f b }
 
 ```
-
-
-
-

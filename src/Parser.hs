@@ -5,6 +5,7 @@ import Control.Monad
 import qualified Data.Char as Char
 import qualified ParserCombinators as P
 import Test.QuickCheck hiding (Fun)
+import Test.HUnit
 import Text.PrettyPrint (Doc, ($$), (<+>), (<>))
 import qualified Text.PrettyPrint as PP
 import Types
@@ -66,6 +67,7 @@ data Declaration = Dec Variable Expression
 
 decParser :: String -> P.Parser Declaration
 parseDec :: String -> Maybe Declaration
+
 -- ==========================
 -- EXPRESSION PARSING
 -- ===========================
@@ -181,7 +183,7 @@ instance PP Expression where
   pp (Var x) = PP.text x
   pp (IntExp x) = PP.text (show x)
   pp (BoolExp x) = if x then PP.text "true" else PP.text "false"
-  pp e@(Op _ _ _) = ppPrec 0 e
+  pp e@(Op {}) = ppPrec 0 e
   pp (If e s1 s2) =
     PP.vcat
       [ PP.text "if" <+> pp e <+> PP.text "then",
@@ -208,9 +210,9 @@ ppPrec n (App e1 e2) =
     ppPrec levelApp e1 <+> ppPrec (levelApp + 1) e2
 ppPrec n e@(Fun _ _) =
   parens (levelFun < n) $ pp e
-ppPrec n e@(If _ _ _) =
+ppPrec n e@(If {}) =
   parens (levelIf < n) $ pp e
-ppPrec n e@(Let _ _ _) =
+ppPrec n e@(Let {}) =
   parens (levelLet < n) $ pp e
 ppPrec _ e' = pp e'
 
@@ -234,6 +236,17 @@ levelFun = 1 -- (= almost always needs parens)
 indented :: PP a => a -> String
 indented = PP.render . pp
 
+-- Declaration unit tests
+
+decTests :: Test
+decTests = TestList [
+    parseDec "x = 5" ~?= Just (Var "x") (IntExp 5),
+    parseDec "x = 5 + y" ~?= Just (Var "x") (Op (IntExp 5) Plus (Var "y")),
+    parseDec "y = \\x -> x * 3" ~?= Just (Var "y") (Lam (Var "x") (Op (Var "x") Times (IntVar 3)))
+  ]
+
+-- Roundtrip property testing
+
 prop_roundtrip :: Expression -> Bool
 prop_roundtrip s = parse (indented s) == Just s
 
@@ -249,22 +262,44 @@ instance Arbitrary Expression where
   shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
   shrink _ = []
 
+genPattern :: Gen Pattern
+genPattern =
+  oneof
+    [ fmap VarP arbVar,
+      fmap IntP arbNat,
+      fmap BoolP arbitrary
+    ]
+
+genType :: Int -> Gen Type
+genType 0 = oneof [IntTy, BoolTy]
+genType n = frequency
+              [ (1, IntTy), (1, BoolTy), (2, liftM2 Fun (genType n') (genType n'))]
+            where n' = n `div` 2
+
+genAppHead :: Gen AppHead
+genAppHead n =
+  oneof
+    [ fmap Var arbVar,
+      liftM2 Annot (genExp n) (genType n),
+      genExp n
+    ]
+
 genExp :: Int -> Gen Expression
 genExp 0 =
   oneof
-    [ liftM Var arbVar,
-      liftM IntExp arbNat,
-      liftM BoolExp arbitrary
+    [ fmap Var arbVar,
+      fmap IntExp arbNat,
+      fmap BoolExp arbitrary
     ]
 genExp n =
   frequency
-    [ (1, liftM Var arbVar),
-      (1, liftM IntExp arbNat),
-      (1, liftM BoolExp arbitrary),
+    [ (1, fmap Var arbVar),
+      (1, fmap IntExp arbNat),
+      (1, fmap BoolExp arbitrary),
       (7, liftM3 Op arbitrary (genExp n') (genExp n')),
-      (7, liftM3 If (genExp n') (genExp n') (genExp n')),
-      (7, liftM2 Fun arbVar (genExp n')),
-      (7, liftM2 App (genExp n') (genExp n')),
+      (4, liftM2 Case (genExp n') (replicate n' (genPattern, genExp n'))),
+      (7, liftM2 Lam arbVar (genExp n')),
+      (4, liftM2 App (genAppHead n') (replicate n' (genExp n'))),
       (7, liftM3 Let arbVar (genExp n') (genExp n'))
     ]
   where
@@ -273,8 +308,10 @@ genExp n =
 instance Arbitrary Bop where
   arbitrary = elements [Plus ..]
 
+instance Arbitrary 
+
 arbNat :: Gen Int
 arbNat = liftM abs arbitrary
 
 arbVar :: Gen Variable
-arbVar = elements $ map pure ['A' .. 'Z']
+arbVar = elements $ map pure ['a' .. 'z']

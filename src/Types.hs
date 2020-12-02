@@ -1,3 +1,9 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+
 module Types where
 
 -- TYPE LEVEL
@@ -8,13 +14,31 @@ type TypeVariable = Char
 newtype InstVariable = IV Char
   deriving (Show, Eq, Ord)
 
+-- // TODO: try doing GADT based stratification
+-- data Strat
+--   = Mono
+--   | Rho
+--   | Sigma
+
+-- data CoolType :: Strat -> * where
+--   IntTy :: CoolType f
+--   BoolTy :: CoolType f
+
 -- monotypes
-data MonoType
-  = IntTy -- i.e. 'Int'
-  | BoolTy -- i.e. 'Bool'
-  | FunTy MonoType MonoType -- i.e. t1 -> t2
-  | VarTy TypeVariable -- we'll get to this later
-  deriving (Eq, Show)
+data MonoType where
+  IntTy :: MonoType -- i.e. 'Int'
+  BoolTy :: MonoType -- i.e. 'Bool'
+  FunTy :: MonoType -> MonoType -> MonoType -- i.e. t1 -> t2
+  MonoTC :: TypeConstructor k -> Vec k MonoType -> MonoType
+  VarTy :: TypeVariable -> MonoType -- we'll get to this later
+
+deriving instance Show MonoType
+
+instance Eq MonoType where
+  IntTy == IntTy = True
+  BoolTy == BoolTy = True
+  (FunTy l1 r1) == (FunTy l2 r2) = l1 == l2 && r1 == r2
+  (MonoTC (TC _ k1) vec1) == (MonoTC (TC _ k2) vec2) = undefined
 
 -- top level mono (rho type)
 data Type
@@ -31,6 +55,10 @@ data Scheme
 -- wrap rho type in scheme
 rho :: Type -> Scheme
 rho = Forall []
+
+-- wrap tau type in scheme
+tau :: MonoType -> Scheme
+tau = Forall [] . Tau
 
 --  | Rho Type
 
@@ -65,6 +93,26 @@ data Kind
   | Arrow Kind
   deriving (Show, Eq)
 
+data SKind :: Kind -> * where
+  SStar :: SKind 'Star
+  SArrow :: SKind k -> SKind (Arrow k)
+
+-- instance TestEquality SKind
+
+deriving instance Show (SKind k)
+
+deriving instance Eq (SKind k)
+
+data Vec :: Kind -> * -> * where
+  Nil :: Vec Star a
+  Cons :: a -> Vec k a -> Vec (Arrow k) a
+
+deriving instance Show a => Show (Vec k a)
+
+deriving instance Eq a => Eq (Vec k a)
+
+-- // TODO: TestEquality
+
 -- HELPER FUNCS
 
 -- create a unification variable, wrapped in a Rho Type
@@ -81,14 +129,18 @@ strip (Forall _ t) = t
 
 -- List (Arrow Star) Star -> Star (* -> *) -> *
 
-data TypeConstructor = TC {getTCName :: String, getKind :: Kind}
-  deriving (Show, Eq)
+data TypeConstructor :: Kind -> * where
+  TC :: String -> SKind k -> TypeConstructor k
+
+deriving instance Show (TypeConstructor k)
+
+deriving instance Eq (TypeConstructor k)
 
 -- EXPRESSION LEVEL
 -- ==============================
 
 -- NOTE: can defer this to type checking
-data DataConstructor = DC {getDCName :: String, getType :: [Type]} -- uppercase
+data DataConstructor = DC {getDCName :: String, getType :: [Scheme]} -- uppercase
   deriving (Show, Eq)
 
 -- type DataConstructor = String

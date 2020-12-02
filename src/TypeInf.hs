@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -Wincomplete-patterns #-}
 
 module TypeInf where
@@ -52,6 +53,7 @@ class Substible v t where
   data Substy v t :: *
 
   after :: Substy v t -> Substy v t -> Substy v t
+  empty :: Substy v t
   s1 `after` s2 = smap s1 s2 `union` s1
   smap :: Substy v t -> Substy v t -> Substy v t
   union :: Substy v t -> Substy v t -> Substy v t
@@ -60,6 +62,7 @@ class Substible v t where
 
 instance Substible InstVariable Scheme where
   data Substy InstVariable Scheme = SSubst (Map InstVariable Scheme) deriving (Show, Eq)
+  empty = SSubst Map.empty
   smap s (SSubst s1) = SSubst $ Map.map (substS s) s1
   union (SSubst s1) (SSubst s2) = SSubst (s1 `Map.union` s2)
 
@@ -75,6 +78,7 @@ instance Substible InstVariable Scheme where
 
 instance Substible InstVariable Type where
   data Substy InstVariable Type = PSubst (Map InstVariable Type) deriving (Show, Eq)
+  empty = PSubst Map.empty
   smap s (PSubst s1) = PSubst $ Map.map (subst s) s1
   union (PSubst s1) (PSubst s2) = PSubst (s1 `Map.union` s2)
 
@@ -86,7 +90,25 @@ instance Substible InstVariable Type where
     let resTy = subst s t
      in Forall vs resTy
 
-newtype Substitution = Subst (Map TypeVariable MonoType) deriving (Show, Eq)
+instance Substible TypeVariable Type where
+  data Substy TypeVariable Type = Subst (Map TypeVariable Type) deriving (Show, Eq)
+  empty = Subst Map.empty
+  smap s (Subst s1) = Subst $ Map.map (subst s) s1
+  union (Subst s1) (Subst s2) = Subst (s1 `Map.union` s2)
+
+  subst _ t@(IVarTy _) = t
+  subst s (RFunTy s1 s2) = RFunTy (substS s s1) (substS s s2)
+  subst (Subst m) t@(Tau mTy) = substM mTy
+    where
+      substM (VarTy v) = fromMaybe t (Map.lookup v m)
+      substM (FunTy t1 t2) = RFunTy (rho $ substM t1) (rho $ substM t2)
+      substM t = Tau t
+
+  substS s (Forall vs t) =
+    let resTy = subst s t
+     in Forall vs resTy
+
+-- newtype Substitution = Subst (Map TypeVariable MonoType) deriving (Show, Eq)
 
 -- afterPoly :: PolySubst -> PolySubst -> PolySubst
 -- SSubst s1 `afterPoly` SSubst s2 = SSubst $ Map.map (subst (SSubst s1)) s2 `Map.union` s1
@@ -98,7 +120,7 @@ newtype Substitution = Subst (Map TypeVariable MonoType) deriving (Show, Eq)
 
 -- substitute out all instantiation variables for fresh unification (type) variables
 genFreshInnerSubst :: [InstVariable] -> TcMonad (Substy InstVariable Type)
-genFreshInnerSubst [] = return (PSubst Map.empty)
+genFreshInnerSubst [] = return empty
 genFreshInnerSubst (x : xs) = do
   PSubst res <- genFreshInnerSubst xs
   a <- fresh
@@ -231,12 +253,73 @@ instantiate env sTy es = do
   return (sTys, ty)
 
 instantiateAux :: TypeEnv -> Scheme -> [Expression] -> InstMonad (Substy InstVariable Scheme, [Scheme], Type)
--- IALL
+-- IALL - generate instantiation variable
 instantiateAux env (Forall (v : vs) ty) es = do
   iv <- freshIV
-  -- let sub = PSubst (Map.singleton v iv)
-  -- instantiateAux env
-  return undefined
+  let sub = Subst (Map.singleton v (IVarTy iv))
+  instantiateAux env (substS sub (Forall vs ty)) es
+-- IARG - take a quick look at the argument
+instantiateAux env (Forall [] ty) (e : es) = case ty of
+  RFunTy st1 st2 -> do
+    -- take a quick look at the argument to generate a substitution
+    sub1 <- qlArgument env e st1
+    -- then do instantiation on the rest
+    (sub2, argTys, resTy) <- instantiateAux env (substS sub1 st2) es
+    -- combine the substitutions
+    let sub = sub2 `after` sub
+    -- substitute in the first argument
+    return (sub, substS sub st1 : argTys, resTy)
+  -- unification variable case
+  (Tau (VarTy v)) -> do
+    -- generate fresh variables for argument and return types
+    argTV <- lift fresh
+    resTV <- lift fresh
+    -- v ~ argTV -> resTV
+    let newType = FunTy (VarTy argTV) (VarTy resTV)
+    lift $ equate (VarTy v) newType
+    -- check with new type
+    instantiateAux env (tau newType) (e : es)
+  -- instantiation variable case
+  (IVarTy v) -> do
+    -- generate fresh instantiation vars
+    argTV <- freshIV
+    resTV <- freshIV
+    -- argTV -> resTV
+    let newType = rho $ RFunTy (rho $ IVarTy argTV) (rho $ IVarTy resTV)
+        sub1 = SSubst (Map.singleton v newType)
+    -- check with new type
+    (sub2, argTys, resTy) <- instantiateAux env newType (e : es)
+    -- combine the substitutions
+    return (sub2 `after` sub1, argTys, resTy)
+  _ -> throwError "Instantiation failed"
+instantiateAux _ (Forall [] ty) [] = return (empty, [], ty)
+
+-- QUICK LOOK JUDGEMENTS
+qlArgument :: TypeEnv -> Expression -> Scheme -> InstMonad (Substy InstVariable Scheme)
+qlArgument env (App h es) (Forall [] pTy) = do
+  -- infer type of head
+  sTy <- qlHead env h
+  (_, retTy) <- lift $ instantiate env sTy es
+  if isGuarded pTy || noFIVs retTy
+    then lift $ mguQLRho pTy retTy
+    else return empty
+qlArgument _ _ _ = return empty
+
+qlHead :: TypeEnv -> AppHead -> InstMonad Scheme
+qlHead env (Var v) = tLookup v (getExpVars env)
+qlHead _ (Annot _ sTy) = return sTy
+qlHead _ _ = throwError "Failure: ql head doesn't allow arbitrary expressions (?)"
+
+-- check if a type is guarded, for quick look purposes
+isGuarded :: Type -> Bool
+isGuarded (RFunTy _ _) = True
+isGuarded (Tau (FunTy _ _)) = True
+isGuarded _ = False
+
+noFIVs :: Type -> Bool
+noFIVs t = null (fiv t)
+
+-- return undefined
 
 -- 4. unification
 mguQLRho :: Type -> Type -> TcMonad (Substy InstVariable Scheme)
@@ -246,7 +329,7 @@ mguQLRho (RFunTy s1 s2) (RFunTy t1 t2) = do
   sub1 <- mguQL s1 t1
   sub2 <- mguQL (substS sub1 s2) (substS sub1 t2)
   return $ sub1 `after` sub2
-mguQLRho _ _ = return $ SSubst Map.empty
+mguQLRho _ _ = return empty
 
 mguQL :: Scheme -> Scheme -> TcMonad (Substy InstVariable Scheme)
 mguQL s1 s2 = mguQLRho (strip s1) (strip s2) -- // TODO: prevent variable escapture
@@ -254,8 +337,8 @@ mguQL s1 s2 = mguQLRho (strip s1) (strip s2) -- // TODO: prevent variable escapt
 --
 --
 -- Putting stuff together
-solve :: [Constraint] -> Either String Substitution
-solve = undefined
+-- solve :: [Constraint] -> Either String Substitution
+-- solve = undefined
 
 -- Infers the type of an expression
 typeInference :: Expression -> Either String Type

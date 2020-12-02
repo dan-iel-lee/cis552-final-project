@@ -1,10 +1,15 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Types where
+
+import Data.Type.Equality
 
 -- TYPE LEVEL
 -- ==============================
@@ -15,97 +20,69 @@ newtype InstVariable = IV Char
   deriving (Show, Eq, Ord)
 
 -- // TODO: try doing GADT based stratification
--- data Strat
---   = Mono
---   | Rho
---   | Sigma
-
--- data CoolType :: Strat -> * where
---   IntTy :: CoolType f
---   BoolTy :: CoolType f
-
--- monotypes
-data MonoType where
-  IntTy :: MonoType -- i.e. 'Int'
-  BoolTy :: MonoType -- i.e. 'Bool'
-  FunTy :: MonoType -> MonoType -> MonoType -- i.e. t1 -> t2
-  MonoTC :: TypeConstructor k -> Vec k MonoType -> MonoType
-  VarTy :: TypeVariable -> MonoType -- we'll get to this later
-
-deriving instance Show MonoType
-
-instance Eq MonoType where
-  IntTy == IntTy = True
-  BoolTy == BoolTy = True
-  (FunTy l1 r1) == (FunTy l2 r2) = l1 == l2 && r1 == r2
-  (MonoTC (TC _ k1) vec1) == (MonoTC (TC _ k2) vec2) = undefined
-
--- top level mono (rho type)
-data Type
-  = IVarTy InstVariable -- instantiation variable
-  | RFunTy Scheme Scheme
-  | Tau MonoType
+data Strat
+  = Mono
+  | Rho
+  | Sigma
   deriving (Show, Eq)
 
--- top level poly
-data Scheme
-  = Forall [TypeVariable] Type
-  deriving (Show, Eq)
+instance Ord Strat where -- Mono <= Rho <= Sigma
+  Mono <= _ = True
+  _ <= Sigma = True
+  Rho <= Rho = True
+  _ <= _ = False
 
--- wrap rho type in scheme
-rho :: Type -> Scheme
-rho = Forall []
+-- constraint enforcing type stratification
+class (<==) (a :: Strat) (b :: Strat)
 
--- wrap tau type in scheme
-tau :: MonoType -> Scheme
-tau = Forall [] . Tau
+instance Mono <== Mono
 
---  | Rho Type
+instance Mono <== Rho
 
--- monotype to rho type
--- mToR :: MonoType -> Type
--- mToR
+instance Mono <== Sigma
 
-liftMtoR :: (MonoType -> MonoType) -> Type -> Type
-liftMtoR f (Tau mt) = Tau (f mt)
-liftMtoR f (RFunTy s1 s2) = RFunTy (liftMtoS f s1) (liftMtoS f s2)
-liftMtoR _ t@(IVarTy _) = t
+instance Rho <== Rho
 
--- lift a Type function to a Scheme function
-liftRtoS :: (Type -> Type) -> Scheme -> Scheme
-liftRtoS f (Forall vs t) = Forall vs (f t)
+instance Rho <== Sigma
 
--- liftRtoS f (Rho t) = Rho $ f t
+instance Sigma <== Sigma
 
-liftMtoS :: (MonoType -> MonoType) -> Scheme -> Scheme
-liftMtoS = liftRtoS . liftMtoR
+data Type :: Strat -> * where
+  IntTy :: Type f
+  BoolTy :: Type f
+  FunTy :: (f1 <== f', f2 <== f') => Type f1 -> Type f2 -> Type f' -- strata is the max of the two stratas
+  TyCstr :: (f <== f') => TypeConstructor k -> Vec k (Type f) -> Type f' -- strata is at least the argument stratas
+  VarTy :: TypeVariable -> Type f -- can be Mono or Rho
+  IVarTy :: (Rho <== f) => InstVariable -> Type f
+  Forall :: (f <== Rho) => [TypeVariable] -> Type f -> Type Sigma -- can be given Mono or Rho
 
--- "sink" a function which takes Schemes to a function which takes Types
-sinkScheme :: (Scheme -> a) -> Type -> a
-sinkScheme f t = f (rho t)
+-- deriving instance Eq (Type f)
 
-sinkScheme2 :: (Scheme -> Scheme -> a) -> Type -> Type -> a
-sinkScheme2 f t1 t2 = f (rho t1) (rho t2)
+deriving instance Show (Type f)
+
+data OldType = forall f. OT (Type f)
+
+deriving instance Show OldType
 
 {- for later -}
-data Kind
-  = Star
-  | Arrow Kind
+data Arity
+  = Z
+  | S Arity
   deriving (Show, Eq)
 
-data SKind :: Kind -> * where
-  SStar :: SKind 'Star
-  SArrow :: SKind k -> SKind (Arrow k)
+data SArity :: Arity -> * where
+  SZ :: SArity 'Z
+  SS :: SArity k -> SArity (S k)
 
--- instance TestEquality SKind
+-- instance TestEquality SArity
 
-deriving instance Show (SKind k)
+deriving instance Show (SArity k)
 
-deriving instance Eq (SKind k)
+deriving instance Eq (SArity k)
 
-data Vec :: Kind -> * -> * where
-  Nil :: Vec Star a
-  Cons :: a -> Vec k a -> Vec (Arrow k) a
+data Vec :: Arity -> * -> * where
+  Nil :: Vec Z a
+  Cons :: a -> Vec k a -> Vec (S k) a
 
 deriving instance Show a => Show (Vec k a)
 
@@ -113,24 +90,8 @@ deriving instance Eq a => Eq (Vec k a)
 
 -- // TODO: TestEquality
 
--- HELPER FUNCS
-
--- create a unification variable, wrapped in a Rho Type
-rVar :: TypeVariable -> Type
-rVar = Tau . VarTy
-
--- create a unification variable, wrapped in a Scheme
-sVar :: TypeVariable -> Scheme
-sVar = rho . rVar
-
--- strip a Scheme
-strip :: Scheme -> Type
-strip (Forall _ t) = t
-
--- List (Arrow Star) Star -> Star (* -> *) -> *
-
-data TypeConstructor :: Kind -> * where
-  TC :: String -> SKind k -> TypeConstructor k
+data TypeConstructor :: Arity -> * where
+  TC :: String -> SArity k -> TypeConstructor k
 
 deriving instance Show (TypeConstructor k)
 
@@ -140,8 +101,8 @@ deriving instance Eq (TypeConstructor k)
 -- ==============================
 
 -- NOTE: can defer this to type checking
-data DataConstructor = DC {getDCName :: String, getType :: [Scheme]} -- uppercase
-  deriving (Show, Eq)
+data DataConstructor = DC {getDCName :: String, getType :: [OldType]} -- uppercase
+  deriving (Show)
 
 -- type DataConstructor = String
 
@@ -152,7 +113,7 @@ data Pattern
   | VarP Variable
   | IntP Int
   | BoolP Bool
-  deriving (Show, Eq)
+  deriving (Show)
 
 -- primitive binary operators (for now)
 data Bop
@@ -170,8 +131,9 @@ type Variable = String -- lowercase
 data AppHead
   = Var Variable
   | Expr Expression
-  | Annot Expression Scheme
-  deriving (Show, Eq)
+  | Annot Expression OldType
+
+deriving instance Show AppHead
 
 data Expression
   = IntExp Int
@@ -183,6 +145,6 @@ data Expression
   | Lam Variable Expression
   | App AppHead [Expression] -- ((s e1) e2) e3
   | Let Variable Expression Expression
-  deriving (Show, Eq)
+  deriving (Show)
 
 -- Annot Expression Type --

@@ -1,7 +1,10 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -Wincomplete-patterns #-}
 
@@ -31,11 +34,11 @@ import Data.Set (Set, fromList)
 import Test.HUnit
 import Types
 
-data Constraint = Equal MonoType MonoType
+data Constraint = Equal (Type 'Mono) (Type 'Mono)
 
-data TypeEnv = TE {getExpVars :: Map Variable Scheme, getTypeVars :: [TypeVariable]}
+data TypeEnv = TE {getExpVars :: Map Variable (Type 'Sigma), getTypeVars :: [TypeVariable]}
 
-envInsExpVar :: Variable -> Scheme -> TypeEnv -> TypeEnv
+envInsExpVar :: Variable -> Type f -> TypeEnv -> TypeEnv
 envInsExpVar x t (TE es as) = TE (Map.insert x t es) as
 
 -- Monad where all type checking takes place
@@ -48,65 +51,87 @@ type TcMonad a =
     )
     a
 
+{-
+Types of substitution
+- instantiation variables for SIgma types
+
+ -}
+
+class Subst a b where
+  type Substitution a b
+  subst :: Substitution a b -> Type a -> Type b
+  after :: Substitution a b -> Substitution a b -> Substitution a b
+
+-- subst ::
+
+instance Subst 'Sigma 'Sigma where
+  type Substitution Sigma Sigma = Map InstVariable OldType
+  subst m t@(IVarTy a) = fromMaybe t (Map.lookup a m)
+  subst m (FunTy s1 s2) = RFunTy (substS m s1) (substS m s2)
+  subst s (Forall vs t) =
+    let resTy = subst s t
+     in Forall vs resTy
+  subst _ t = t
+
 -- // TODO: extract out common substitution patterns
-class Substible v t where
-  data Substy v t :: *
+-- class Substible v t where
+--   data Substy v t :: *
 
-  after :: Substy v t -> Substy v t -> Substy v t
-  empty :: Substy v t
-  s1 `after` s2 = smap s1 s2 `union` s1
-  smap :: Substy v t -> Substy v t -> Substy v t
-  union :: Substy v t -> Substy v t -> Substy v t
-  subst :: Substy v t -> Type -> t
-  substS :: Substy v t -> Scheme -> Scheme
+--   after :: Substy v t -> Substy v t -> Substy v t
+--   empty :: Substy v t
+--   s1 `after` s2 = smap s1 s2 `union` s1
+--   smap :: Substy v t -> Substy v t -> Substy v t
+--   union :: Substy v t -> Substy v t -> Substy v t
+--   subst :: Substy v t -> Type -> t
+--   substS :: Substy v t -> Scheme -> Scheme
 
-instance Substible InstVariable Scheme where
-  data Substy InstVariable Scheme = SSubst (Map InstVariable Scheme) deriving (Show, Eq)
-  empty = SSubst Map.empty
-  smap s (SSubst s1) = SSubst $ Map.map (substS s) s1
-  union (SSubst s1) (SSubst s2) = SSubst (s1 `Map.union` s2)
+-- instance Substible InstVariable Scheme where
+--   data Substy InstVariable Scheme = SSubst (Map InstVariable Scheme) deriving (Show, Eq)
+--   empty = SSubst Map.empty
+--   smap s (SSubst s1) = SSubst $ Map.map (substS s) s1
+--   union (SSubst s1) (SSubst s2) = SSubst (s1 `Map.union` s2)
 
-  subst (SSubst s) t@(IVarTy a) = fromMaybe (rho t) (Map.lookup a s)
-  subst s (RFunTy s1 s2) = rho $ RFunTy (substS s s1) (substS s s2)
-  subst _ t@(Tau _) = rho t
+--   subst (SSubst s) t@(IVarTy a) = fromMaybe (rho t) (Map.lookup a s)
+--   subst s (RFunTy s1 s2) = rho $ RFunTy (substS s s1) (substS s s2)
+--   subst _ t@(Tau _) = rho t
 
-  substS s (Forall vs t) =
-    let Forall ys resTy = subst s t
-     in Forall (vs ++ ys) resTy
+--   substS s (Forall vs t) =
+--     let Forall ys resTy = subst s t
+--      in Forall (vs ++ ys) resTy
 
--- substS
+-- -- substS
 
-instance Substible InstVariable Type where
-  data Substy InstVariable Type = PSubst (Map InstVariable Type) deriving (Show, Eq)
-  empty = PSubst Map.empty
-  smap s (PSubst s1) = PSubst $ Map.map (subst s) s1
-  union (PSubst s1) (PSubst s2) = PSubst (s1 `Map.union` s2)
+-- instance Substible InstVariable Type where
+--   data Substy InstVariable Type = PSubst (Map InstVariable Type) deriving (Show, Eq)
+--   empty = PSubst Map.empty
+--   smap s (PSubst s1) = PSubst $ Map.map (subst s) s1
+--   union (PSubst s1) (PSubst s2) = PSubst (s1 `Map.union` s2)
 
-  subst (PSubst s) t@(IVarTy a) = fromMaybe t (Map.lookup a s)
-  subst s (RFunTy s1 s2) = RFunTy (substS s s1) (substS s s2)
-  subst _ t@(Tau _) = t
+--   subst (PSubst s) t@(IVarTy a) = fromMaybe t (Map.lookup a s)
+--   subst s (RFunTy s1 s2) = RFunTy (substS s s1) (substS s s2)
+--   subst _ t@(Tau _) = t
 
-  substS s (Forall vs t) =
-    let resTy = subst s t
-     in Forall vs resTy
+--   substS s (Forall vs t) =
+--     let resTy = subst s t
+--      in Forall vs resTy
 
-instance Substible TypeVariable Type where
-  data Substy TypeVariable Type = Subst (Map TypeVariable Type) deriving (Show, Eq)
-  empty = Subst Map.empty
-  smap s (Subst s1) = Subst $ Map.map (subst s) s1
-  union (Subst s1) (Subst s2) = Subst (s1 `Map.union` s2)
+-- instance Substible TypeVariable Type where
+--   data Substy TypeVariable Type = Subst (Map TypeVariable Type) deriving (Show, Eq)
+--   empty = Subst Map.empty
+--   smap s (Subst s1) = Subst $ Map.map (subst s) s1
+--   union (Subst s1) (Subst s2) = Subst (s1 `Map.union` s2)
 
-  subst _ t@(IVarTy _) = t
-  subst s (RFunTy s1 s2) = RFunTy (substS s s1) (substS s s2)
-  subst (Subst m) t@(Tau mTy) = substM mTy
-    where
-      substM (VarTy v) = fromMaybe t (Map.lookup v m)
-      substM (FunTy t1 t2) = RFunTy (rho $ substM t1) (rho $ substM t2)
-      substM t = Tau t
+--   subst _ t@(IVarTy _) = t
+--   subst s (RFunTy s1 s2) = RFunTy (substS s s1) (substS s s2)
+--   subst (Subst m) t@(Tau mTy) = substM mTy
+--     where
+--       substM (VarTy v) = fromMaybe t (Map.lookup v m)
+--       substM (FunTy t1 t2) = RFunTy (rho $ substM t1) (rho $ substM t2)
+--       substM t = Tau t
 
-  substS s (Forall vs t) =
-    let resTy = subst s t
-     in Forall vs resTy
+--   substS s (Forall vs t) =
+--     let resTy = subst s t
+--      in Forall vs resTy
 
 -- newtype Substitution = Subst (Map TypeVariable MonoType) deriving (Show, Eq)
 
@@ -119,12 +144,12 @@ instance Substible TypeVariable Type where
 -- substHelper _ t@(Tau _) = Rho t
 
 -- substitute out all instantiation variables for fresh unification (type) variables
-genFreshInnerSubst :: [InstVariable] -> TcMonad (Substy InstVariable Type)
-genFreshInnerSubst [] = return empty
-genFreshInnerSubst (x : xs) = do
-  PSubst res <- genFreshInnerSubst xs
-  a <- fresh
-  return $ PSubst (Map.insert x (Tau $ VarTy a) res)
+-- genFreshInnerSubst :: [InstVariable] -> TcMonad (Substy InstVariable Type)
+-- genFreshInnerSubst [] = return empty
+-- genFreshInnerSubst (x : xs) = do
+--   PSubst res <- genFreshInnerSubst xs
+--   a <- fresh
+--   return $ PSubst (Map.insert x (Tau $ VarTy a) res)
 
 -- HELPERS
 
@@ -143,7 +168,7 @@ freshIV = do
   return (IV s)
 
 -- | Checks if two types are equal
-equate :: MonoType -> MonoType -> TcMonad ()
+equate :: Type 'Mono -> Type 'Mono -> TcMonad ()
 equate = undefined
 
 -- | Looks up a variable in a context
@@ -154,33 +179,36 @@ tLookup x env = do
     Nothing -> throwError $ "Unbound variable " ++ x
 
 -- | looks for the free instantiation variables of a type
-fiv :: Type -> [InstVariable]
-fiv (Tau _) = []
-fiv (RFunTy s1 s2) = fiv (strip s1) ++ fiv (strip s2)
-fiv (IVarTy v) = [v]
+fiv :: (Rho <== f) => Type f -> [InstVariable]
+fiv (FunTy ty1 ty2) = fiv ty1 ++ fiv ty2
+fiv (VarTy v) = [v]
+fiv (Forall _ ty) = fiv ty
+
+-- // TODO: other cases for fiv
+-- fiv (TyCstr _ )
 
 fivs :: [Type] -> [InstVariable]
 fivs = foldMap fiv
 
 -- | Calls inferTy to generate a type and the constraints
-genConstraints :: Expression -> Either String (Type, [Constraint])
+genConstraints :: Expression -> Either String (Type 'Rho, [Constraint])
 genConstraints = undefined
 
 -- JUDGEMENTS
 -- 1. check type
-checkGen :: TypeEnv -> Expression -> Scheme -> TcMonad ()
+checkGen :: TypeEnv -> Expression -> Type f -> TcMonad ()
 checkGen (TE es as) e (Forall vs t) = checkType newEnv e t
   where
     newEnv = TE es (as ++ vs)
 
 -- checkGen env e (rho p) = checkType env e p
 
-checkType :: TypeEnv -> Expression -> Type -> TcMonad ()
+checkType :: TypeEnv -> Expression -> Type 'Rho -> TcMonad ()
 -- LAMBDA CASES
-checkType (TE es as) (Lam x e) (RFunTy s1 s2) = checkGen newEnv e s2
+checkType (TE es as) (Lam x e) (FunTy s1 s2) = checkGen newEnv e s2
   where
     newEnv = TE (Map.insert x s1 es) as
-checkType env (Lam x e) (Tau t@(VarTy v)) = do
+checkType env (Lam x e) t@(VarTy v) = do
   argTy <- fresh
   resTy <- fresh
   let newEnv = envInsExpVar x (sVar argTy) env
@@ -207,7 +235,7 @@ checkType env (App h es) rho = do
 checkType _ _ _ = error "IMPLEMENT BRO"
 
 -- 2. infer type
-inferType :: TypeEnv -> Expression -> TcMonad Type
+inferType :: TypeEnv -> Expression -> TcMonad (Type 'Rho)
 inferType _ (IntExp _) = return $ Tau IntTy
 inferType _ (BoolExp _) = return $ Tau BoolTy
 inferType env (Lam x e) = do
@@ -227,7 +255,7 @@ inferType env (App h es) = do
 -- // TODO: all other types of types
 inferType _ _ = error "Unimplemented"
 
-inferTypeHead :: TypeEnv -> AppHead -> TcMonad Scheme
+inferTypeHead :: TypeEnv -> AppHead -> TcMonad (Type 'Sigma)
 inferTypeHead env (Var v) = tLookup v (getExpVars env)
 inferTypeHead env (Annot e t) = do
   checkGen env e t
@@ -247,12 +275,12 @@ type TcMonad' =
 
 type InstMonad a = StateT InstVariable TcMonad' a
 
-instantiate :: TypeEnv -> Scheme -> [Expression] -> TcMonad ([Scheme], Type)
+instantiate :: TypeEnv -> Type f -> [Expression] -> TcMonad ([Type 'Sigma], Type 'Rho)
 instantiate env sTy es = do
   (_, sTys, ty) <- evalStateT (instantiateAux env sTy es) (IV 'K')
   return (sTys, ty)
 
-instantiateAux :: TypeEnv -> Scheme -> [Expression] -> InstMonad (Substy InstVariable Scheme, [Scheme], Type)
+instantiateAux :: TypeEnv -> Type f -> [Expression] -> InstMonad (Substitution Sigma Sigma, [Type 'Sigma], Type 'Rho)
 -- IALL - generate instantiation variable
 instantiateAux env (Forall (v : vs) ty) es = do
   iv <- freshIV
@@ -260,7 +288,7 @@ instantiateAux env (Forall (v : vs) ty) es = do
   instantiateAux env (substS sub (Forall vs ty)) es
 -- IARG - take a quick look at the argument
 instantiateAux env (Forall [] ty) (e : es) = case ty of
-  RFunTy st1 st2 -> do
+  FunTy st1 st2 -> do
     -- take a quick look at the argument to generate a substitution
     sub1 <- qlArgument env e st1
     -- then do instantiation on the rest
@@ -270,7 +298,7 @@ instantiateAux env (Forall [] ty) (e : es) = case ty of
     -- substitute in the first argument
     return (sub, substS sub st1 : argTys, resTy)
   -- unification variable case
-  (Tau (VarTy v)) -> do
+  (VarTy v) -> do
     -- generate fresh variables for argument and return types
     argTV <- lift fresh
     resTV <- lift fresh
@@ -295,7 +323,7 @@ instantiateAux env (Forall [] ty) (e : es) = case ty of
 instantiateAux _ (Forall [] ty) [] = return (empty, [], ty)
 
 -- QUICK LOOK JUDGEMENTS
-qlArgument :: TypeEnv -> Expression -> Scheme -> InstMonad (Substy InstVariable Scheme)
+qlArgument :: TypeEnv -> Expression -> Type f -> InstMonad (Substitution Sigma Sigma)
 qlArgument env (App h es) (Forall [] pTy) = do
   -- infer type of head
   sTy <- qlHead env h
@@ -305,15 +333,15 @@ qlArgument env (App h es) (Forall [] pTy) = do
     else return empty
 qlArgument _ _ _ = return empty
 
-qlHead :: TypeEnv -> AppHead -> InstMonad Scheme
+qlHead :: TypeEnv -> AppHead -> InstMonad (Type 'Sigma)
 qlHead env (Var v) = tLookup v (getExpVars env)
 qlHead _ (Annot _ sTy) = return sTy
 qlHead _ _ = throwError "Failure: ql head doesn't allow arbitrary expressions (?)"
 
 -- check if a type is guarded, for quick look purposes
-isGuarded :: Type -> Bool
-isGuarded (RFunTy _ _) = True
-isGuarded (Tau (FunTy _ _)) = True
+isGuarded :: Type f -> Bool
+isGuarded (FunTy _ _) = True
+isGuarded TyCstr {} = True
 isGuarded _ = False
 
 noFIVs :: Type -> Bool
@@ -322,17 +350,17 @@ noFIVs t = null (fiv t)
 -- return undefined
 
 -- 4. unification
-mguQLRho :: Type -> Type -> TcMonad (Substy InstVariable Scheme)
-mguQLRho t1 (IVarTy v) = return $ SSubst (Map.singleton v (rho t1))
-mguQLRho (IVarTy v) t2 = return $ SSubst (Map.singleton v (rho t2))
-mguQLRho (RFunTy s1 s2) (RFunTy t1 t2) = do
+mguQL :: Type f -> Type f -> TcMonad (Substitution Sigma Sigma)
+mguQL t1 (IVarTy v) = return $ SSubst (Map.singleton v (rho t1))
+mguQL (IVarTy v) t2 = return $ SSubst (Map.singleton v (rho t2))
+mguQL (FunTy s1 s2) (FunTy t1 t2) = do
   sub1 <- mguQL s1 t1
   sub2 <- mguQL (substS sub1 s2) (substS sub1 t2)
   return $ sub1 `after` sub2
-mguQLRho _ _ = return empty
+mguQL _ _ = return empty
 
-mguQL :: Scheme -> Scheme -> TcMonad (Substy InstVariable Scheme)
-mguQL s1 s2 = mguQLRho (strip s1) (strip s2) -- // TODO: prevent variable escapture
+-- mguQL :: Type f -> Type f -> TcMonad (Substy InstVariable Scheme)
+-- mguQL s1 s2 = mguQLRho (strip s1) (strip s2) -- // TODO: prevent variable escapture
 
 --
 --

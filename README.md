@@ -1,6 +1,11 @@
 # project-cis552
 
 
+## TODO type checking
+- do I want to separate out AppHead?
+- figure out how qlArgument works
+- figure out polymorphic mgu
+
 ## Why abandon GADT solution?
 I'm starting to realize that enforcing stratification at the implementation level is more of a headache
 than a help. It requires a lot of type trickery, which can be fun, but also painful. What do we get

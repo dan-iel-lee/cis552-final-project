@@ -145,22 +145,26 @@ data Bop
 
 type Variable = String -- lowercase
 
-data AppHead
-  = Var Variable
-  | Expr Expression
-  | Annot Expression Type
-  | C DataConstructor
+-- data AppHead
+--   = Var Variable
+--   | Expr Expression
+--   | Annot Expression Type
+--   | C DataConstructor
 
-deriving instance Show AppHead
+-- deriving instance Show AppHead
 
 data Expression
-  = IntExp Int
+  = Var Variable
+  | -- | user defined data constructors
+    Annot Expression Type
+  | C DataConstructor
+  | -- | primitives
+    IntExp Int
   | BoolExp Bool
   | Op Bop Expression Expression
-  | -- constructors
-    Case Expression [(Pattern, Expression)]
+  | Case Expression [(Pattern, Expression)]
   | Lam Variable Expression
-  | App AppHead [Expression] -- ((s e1) e2) e3
+  | App Expression [Expression] -- ((s e1) e2) e3
   | Let Variable Expression Expression
   deriving (Show)
 

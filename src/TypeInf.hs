@@ -38,42 +38,100 @@ import Test.HUnit
 import Types
 import Prelude hiding (zipWith)
 
-data Constraint = Equal Type Type
-  deriving (Show, Eq)
+{-
+==================================================================
+                  Types and Other Intro Stuff
+==================================================================
 
-data TypeEnv = TE {getExpVars :: Map Variable Type, getTypeVars :: [TypeVariable]}
+We start off by the data types we'll be using through the rest of
+this module.
+-}
+
+-- | The typing context
+data TypeEnv = TE
+  { -- | Bound variables and their types (ex. x : IntTy)
+    getExpVars :: Map Variable Type,
+    -- | Type variables in context
+    getTypeVars :: [TypeVariable]
+  }
   deriving (Show, Eq)
 
 emptyEnv :: TypeEnv
 emptyEnv = TE Map.empty []
 
-envInsExpVar :: Variable -> Type -> TypeEnv -> TypeEnv
-envInsExpVar x t (TE es as) = TE (Map.insert x t es) as
+-- | env |: (v, ty)
+-- | adds the variable and type to the context of bound variables
+(|:) :: TypeEnv -> (Variable, Type) -> TypeEnv
+(TE es as) |: (x, t) = TE (Map.insert x t es) as
 
--- Monad where all type checking takes place
-type TcMonad a =
+-- | Equality constraints generated during type inference
+-- and solved afterwards via unification
+data Constraint = Equal Type Type
+  deriving (Show, Eq)
+
+-- | Generates an equality constraint
+equate :: Type -> Type -> TcMonad ()
+equate t1 t2
+  | t1 == t2 = return ()
+  | otherwise = tell [Equal t1 t2]
+
+type TcMonad' =
   WriterT
-    [Constraint] -- gathered constraints
+    -- gathered constraints
+    [Constraint]
     ( StateT
-        TypeVariable -- generator for new type variables
-        (Either String) -- error messages (for unbound variables)
+        -- generator for new type variables
+        TypeVariable
+        -- error messages (for unbound variables)
+        (Either String)
     )
-    a
+
+-- | Monad where all type checking takes place
+type TcMonad a = TcMonad' a
+
+-- | Monad where type instantiation takes place
+-- wraps TcMonad
+type InstMonad a = StateT InstVariable TcMonad' a
 
 {-
-Types of substitution
-- instantiation variables for SIgma types
+==================================================================
+                        Substitutions
+==================================================================
 
- -}
+In this section, we define a 'Subst' type class parametrized by
+the type of thing being substituted for. In our case, we
+have two instances: for InstVariable and TypeVariable.
 
+InstVariables are used purely in the 'instantiate' judgement and
+can be instantiated for polytypes.
+
+TypeVariables are used in the final constraint based unification
+step and can be instantiated only with monotypes.
+
+We also define a useful helper method 'substInstForUni' which
+takes a list of Instantiation variables and creates a substitution
+replacing those instantiation variables with (fresh) unification
+vars.
+-}
 class Subst a where
+  -- | Associated datatype representing the substitution
   data Substitution a
+
   empty :: Substitution a
+
+  -- | perform the given substitution on a type to yield another type
   subst :: Substitution a -> Type -> Type
+
+  -- | perform one substitution and then the other
   after :: Substitution a -> Substitution a -> Substitution a
 
 -- subst ::
 
+-- fold over a type
+-- foldTy :: Monoid m => (Type -> m) -> m -> Type -> m
+-- foldTy f b (FunTy ty1 ty2) =
+
+-- // TODO: try to combien the two subst definitions cause they're so similar
 instance Subst InstVariable where
   data Substitution InstVariable = SI (Map InstVariable Type) deriving (Show, Eq)
   empty = SI Map.empty
@@ -86,6 +144,7 @@ instance Subst InstVariable where
   subst s (TyCstr tc vec) = TyCstr tc $ fmap (subst s) vec
   subst _ t = t
 
+  -- do s1 on s2, then union
   s1@(SI m1) `after` (SI m2) = SI $ Map.map (subst s1) m2 `Map.union` m1
 
 instance Subst TypeVariable where
@@ -102,15 +161,26 @@ instance Subst TypeVariable where
 
   s1@(SU m1) `after` (SU m2) = SU $ Map.map (subst s1) m2 `Map.union` m1
 
--- substitute out all instantiation variables for fresh unification (type) variables
-genFreshInnerSubst :: [InstVariable] -> TcMonad (Substitution InstVariable)
-genFreshInnerSubst [] = return empty
-genFreshInnerSubst (x : xs) = do
-  SI res <- genFreshInnerSubst xs
+-- | substitute out all instantiation variables for fresh unification (type) variables
+substInstToUni :: [InstVariable] -> TcMonad (Substitution InstVariable)
+substInstToUni [] = return empty
+substInstToUni (x : xs) = do
+  SI res <- substInstToUni xs
   a <- fresh
   return $ SI (Map.insert x (VarTy a) res)
 
--- HELPERS
+{-
+==================================================================
+                        Variables
+==================================================================
+
+We work with three different kinds of variables: term level
+'Variable', unification 'TypeVariable', and instantiation
+'InstVariable'.
+
+In this section, we define some useful methods for working with
+these variables.
+-}
 
 -- | Generates a fresh type variable
 fresh :: TcMonad TypeVariable
@@ -126,12 +196,6 @@ freshIV = do
   put $ IV (succ s)
   return (IV s)
 
--- | Checks if two types are equal
-equate :: Type -> Type -> TcMonad ()
-equate t1 t2
-  | t1 == t2 = return ()
-  | otherwise = tell [Equal t1 t2]
-
 -- | Looks up a variable in a context
 tLookup :: MonadError String m => Variable -> Map Variable a -> m a
 tLookup x env = do
@@ -139,7 +203,7 @@ tLookup x env = do
     Just ty -> return ty
     Nothing -> throwError $ "Unbound variable " ++ x
 
--- | looks for the free instantiation variables of a type
+-- | Looks for the free instantiation variables of a type
 fiv :: Type -> [InstVariable]
 fiv (FunTy ty1 ty2) = fiv ty1 ++ fiv ty2
 fiv (IVarTy v) = [v]
@@ -148,15 +212,22 @@ fiv (Forall _ ty) = fiv ty
 fiv (TyCstr _ args) = foldr (\x acc -> fiv x ++ acc) [] args
 fiv _ = []
 
--- // TODO: other cases for fiv
--- fiv (TyCstr _ )
-
+-- | Finds all FIVs in a list of types
 fivs :: [Type] -> [InstVariable]
 fivs = foldMap fiv
 
 -- | Calls inferTy to generate a type and the constraints
 genConstraints :: Expression -> Either String (Type, [Constraint])
 genConstraints = undefined
+
+{-
+==================================================================
+                        Type Checking
+==================================================================
+
+Alright, we're ready to get into the real tofu of all this. The
+bidirectional type inference system is composed of three.
+-}
 
 -- JUDGEMENTS
 -- 1. check type
@@ -165,16 +236,21 @@ checkType :: TypeEnv -> Expression -> Type -> TcMonad ()
 -- GEN
 checkType (TE es as) e (Forall vs t) = checkType newEnv e t
   where
+    -- add the quantified variables to the context
     newEnv = TE es (as ++ vs)
 -- LAMBDA CASES
 checkType (TE es as) (Lam x e) (FunTy s1 s2) = checkType newEnv e s2
   where
+    -- add the argument to the context
     newEnv = TE (Map.insert x s1 es) as
-checkType env (Lam x e) t@(VarTy v) = do
+checkType env (Lam x e) t@(VarTy _) = do
+  -- generate fresh type variables for the argument and return types
   argTy <- fresh
   resTy <- fresh
-  let newEnv = envInsExpVar x (VarTy argTy) env
-  equate t (FunTy (VarTy argTy) (VarTy resTy)) -- generate constraint
+  -- t ~ argTy -> resTy
+  equate t (FunTy (VarTy argTy) (VarTy resTy))
+  -- do the usual lambda check
+  let newEnv = env |: (x, VarTy argTy)
   checkType newEnv e (VarTy resTy)
 checkType _ e@(Lam _ _) _ = throwError $ "Invalid type for lambda at: " <> show e -- // TODO: replace with pretty print
 -- APP
@@ -185,12 +261,12 @@ checkType env (App h es) rho = do
   (argTys, resTy) <- instantiate env headTy es
   -- unify with the expected type
   sub1 <- mguQL resTy rho
-  -- perform substitutinos
+  -- perform substitutions
   let argTys' = map (subst sub1) argTys
       resTy' = subst sub1 resTy
       -- generate a substitution to get rid of instantiation vars
       together = resTy' : argTys'
-  sub2 <- genFreshInnerSubst (fivs together)
+  sub2 <- substInstToUni (fivs together)
   -- generate the requisite constraints for the argument types
   forM_ (zip es argTys') (\(e, t) -> checkType env e (subst sub2 t))
 checkType _ (IntExp _) ty
@@ -208,7 +284,7 @@ inferType _ (IntExp _) = return IntTy
 inferType _ (BoolExp _) = return BoolTy
 inferType env (Lam x e) = do
   argTy <- fresh
-  inferType (envInsExpVar x (VarTy argTy) env) e
+  inferType (env |: (x, VarTy argTy)) e
 inferType env (App h es) = do
   -- infer type of head
   headTy <- inferTypeHead env h
@@ -216,7 +292,7 @@ inferType env (App h es) = do
   (argTys, resTy) <- instantiate env headTy es
   -- generate a substitution to get rid of instantiation vars
   let together = resTy : argTys
-  sub <- genFreshInnerSubst (fivs together)
+  sub <- substInstToUni (fivs together)
   -- generate the requisite constraints for the argument types
   forM_ (zip es argTys) (\(e, t) -> checkType env e (subst sub t))
   return $ subst sub resTy
@@ -234,15 +310,6 @@ inferTypeHead _ (C (DC _ ty)) = return ty -- // TODO: check if ty is actually a 
 -- 3. instantiate
 -- need to keep track of instantiation vars
 -- a partially applied TcMonad
-type TcMonad' =
-  WriterT
-    [Constraint] -- gathered constraints
-    ( StateT
-        TypeVariable -- generator for new type variables
-        (Either String) -- error messages (for unbound variables)
-    )
-
-type InstMonad a = StateT InstVariable TcMonad' a
 
 instantiate :: TypeEnv -> Type -> [Expression] -> TcMonad ([Type], Type)
 instantiate env sTy es = do
@@ -405,21 +472,6 @@ testTypeInf =
       typeInference bad1 ~?= Left "bad operator parameters",
       typeInference bad2 ~?= Left "function applied to too many arguments"
     ]
-
-{-
-x = 5
-y = 6
-
-() -- Unit
-
-let x = 5 in ()
-
-x :: x
-alpha ~ Int
-
-solve => [alpha := Int]
-
--}
 
 -- EXAMPLES AND FUN
 listTC :: TypeConstructor (S Z)

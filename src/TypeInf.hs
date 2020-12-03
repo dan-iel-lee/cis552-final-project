@@ -130,17 +130,13 @@ vars.
 type Substitution a = Map a Type
 
 class (Ord a, Show a) => Subst a where
-  -- | Associated datatype representing the substitution
-
-  -- data Substitution a
-
   singSubst :: a -> Type -> Substitution a
   singSubst = Map.singleton
 
-  wrap :: Char -> a
-
   emptySubst :: Substitution a
   emptySubst = Map.empty
+
+  wrap :: Char -> a
 
   -- | perform the given substitution on a type to yield another type
   subst :: Substitution a -> Type -> Type
@@ -151,6 +147,7 @@ class (Ord a, Show a) => Subst a where
   -- | a way to find free variables in a type
   freeV :: Type -> Set a
 
+  -- | Create substitutino assigning variable to a type
   varAsgn :: MonadError [Char] m => Char -> Type -> m (Substitution a)
   varAsgn a t
     | t == VarTy a = return emptySubst
@@ -205,12 +202,6 @@ substInstToUni =
         return (Map.insert x (VarTy a) acc)
     )
     emptySubst
-
--- substInstToUni [] = return empty
--- substInstToUni (x : xs) = do
---   SI res <- substInstToUni xs
---   a <- fresh
---   return $ SI (Map.insert x (VarTy a) res)
 
 {-
 ==================================================================
@@ -476,8 +467,6 @@ instantiateAux env (IVarTy v) (e : es) = do
 instantiateAux _ ty [] = return (emptySubst, [], ty)
 instantiateAux env ty es = throwError $ "Fail: " <> show env <> "  " <> show ty <> "  " <> show es
 
--- QUICK LOOK JUDGEMENTS // TODO: add other cases
-
 -- | Takes a quick look at an expression. If it is guarded or has no free instantiation variables
 -- then we're free to substitute
 qlArgument :: TypeEnv -> Expression -> Type -> InstMonad (Substitution InstVariable)
@@ -506,9 +495,6 @@ qlArgument env e pTy =
     noFIVs :: Type -> Bool
     noFIVs t = null (fiv t)
 
--- qlArgument env IntTy
--- qlArgument _ _ _ = return empty
-
 -- | Looks at the head to see if there's any easy information to be got
 qlHead :: TypeEnv -> Expression -> InstMonad Type
 qlHead env (Var v) = tLookup v (getExpVars env)
@@ -526,7 +512,7 @@ qlHead _ _ = throwError "Failure: ql head doesn't allow arbitrary expressions (?
 
 -}
 
--- 4. unification
+-- | finds the most general unifier for poly types
 mguQL :: Type -> Type -> TcMonad (Substitution InstVariable)
 mguQL t1 (IVarTy (IV v)) = varAsgn v t1
 mguQL (IVarTy (IV v)) t2 = varAsgn v t2
@@ -589,22 +575,13 @@ solve =
     )
     emptySubst
 
+-- | Really puts everything together. Goes from an environment
+-- and expression to either a type of an error.
 typeInference :: TypeEnv -> Expression -> Either String Type
 typeInference env e = do
   (ty, constraints) <- genConstraints env e
   s <- solve constraints
   return (subst s ty)
-
--- mguQL :: Type -> Type -> TcMonad (Substy InstVariable Scheme)
--- mguQL s1 s2 = mguQLRho (strip s1) (strip s2) -- // TODO: prevent variable escapture
-
---
---
--- Putting stuff together
--- solve :: [Constraint] -> Either String Substitution
--- solve = undefined
-
--- Infers the type of an expression
 
 -- | Used by Eval to filter ill-typed expressions
 isValid :: Expression -> Bool
@@ -615,6 +592,12 @@ isValid = undefined
 
 -- GOOD CASES
 -- let f = \x -> x in (f 1)
+
+{-
+==================================================================
+                  Test Cases and Examples
+==================================================================
+-}
 
 good1 = Let "f" (Lam "x" (var "x")) (App (Var "f") [IntExp 1])
 

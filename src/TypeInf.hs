@@ -127,16 +127,20 @@ takes a list of Instantiation variables and creates a substitution
 replacing those instantiation variables with (fresh) unification
 vars.
 -}
+type Substitution a = Map a Type
+
 class (Ord a, Show a) => Subst a where
   -- | Associated datatype representing the substitution
-  -- type Substitution a = S (Map a Type)
-  data Substitution a
 
-  sing :: a -> Type -> Substitution a
+  -- data Substitution a
+
+  singSubst :: a -> Type -> Substitution a
+  singSubst = Map.singleton
 
   wrap :: Char -> a
 
-  empty :: Substitution a
+  emptySubst :: Substitution a
+  emptySubst = Map.empty
 
   -- | perform the given substitution on a type to yield another type
   subst :: Substitution a -> Type -> Type
@@ -149,23 +153,21 @@ class (Ord a, Show a) => Subst a where
 
   varAsgn :: MonadError [Char] m => Char -> Type -> m (Substitution a)
   varAsgn a t
-    | t == VarTy a = return empty
-    | t == IVarTy (IV a) = return empty
+    | t == VarTy a = return emptySubst
+    | t == IVarTy (IV a) = return emptySubst
     | a `Set.member` freeV t =
       throwError $
         "occur check fails: " ++ show a ++ " in " ++ show t
-    | otherwise = return $ sing (wrap a) t
+    | otherwise = return $ singSubst (wrap a) t
 
 -- subst ::
 
 -- // TODO: try to combien the two subst definitions cause they're so similar
 instance Subst InstVariable where
-  data Substitution InstVariable = SI (Map InstVariable Type) deriving (Show, Eq)
-  empty = SI Map.empty
-  sing iv ty = SI (Map.singleton iv ty)
-  wrap c = IV c
+  -- data Substitution InstVariable = SI (Map InstVariable Type) deriving (Show, Eq)
+  wrap = IV
 
-  subst (SI m) t@(IVarTy a) = fromMaybe t (Map.lookup a m)
+  subst m t@(IVarTy a) = fromMaybe t (Map.lookup a m)
   subst m (FunTy s1 s2) = FunTy (subst m s1) (subst m s2)
   subst s (Forall vs t) =
     let resTy = subst s t
@@ -176,15 +178,13 @@ instance Subst InstVariable where
   freeV = fiv
 
   -- do s1 on s2, then union
-  s1@(SI m1) `after` (SI m2) = SI $ Map.map (subst s1) m2 `Map.union` m1
+  s1 `after` s2 = Map.map (subst s1) s2 `Map.union` s1
 
 instance Subst TypeVariable where
-  data Substitution TypeVariable = SU (Map TypeVariable Type) deriving (Show, Eq)
-  empty = SU Map.empty
-  sing iv ty = SU (Map.singleton iv ty)
+  -- data Substitution TypeVariable = SU (Map TypeVariable Type) deriving (Show, Eq)
   wrap c = c
 
-  subst (SU m) t@(VarTy a) = fromMaybe t (Map.lookup a m)
+  subst m t@(VarTy a) = fromMaybe t (Map.lookup a m)
   subst m (FunTy s1 s2) = FunTy (subst m s1) (subst m s2)
   subst s (Forall vs t) =
     let resTy = subst s t
@@ -194,17 +194,17 @@ instance Subst TypeVariable where
 
   freeV = fv
 
-  s1@(SU m1) `after` (SU m2) = SU $ Map.map (subst s1) m2 `Map.union` m1
+  s1 `after` s2 = Map.map (subst s1) s2 `Map.union` s1
 
 -- | substitute out all instantiation variables for fresh unification (type) variables
 substInstToUni :: Foldable f => f InstVariable -> TcMonad (Substitution InstVariable)
 substInstToUni =
   foldM
-    ( \(SI acc) x -> do
+    ( \acc x -> do
         a <- fresh
-        return $ SI (Map.insert x (VarTy a) acc)
+        return (Map.insert x (VarTy a) acc)
     )
-    empty
+    emptySubst
 
 -- substInstToUni [] = return empty
 -- substInstToUni (x : xs) = do
@@ -246,7 +246,7 @@ tLookup x env = do
     Just ty -> return ty
     Nothing -> throwError $ "Unbound variable " ++ x
 
--- fold over a type
+-- | Fold over a type (used to implement 'fiv' and 'fv')
 foldTy :: Monoid m => (Type -> Maybe m) -> Type -> m
 foldTy f ty = case f ty of
   Just m -> m
@@ -257,9 +257,6 @@ foldTy f ty = case f ty of
     contFold f (TyCstr _ args) = foldMap (foldTy f) args
     contFold _ _ = mempty
 
--- foldTy f (IVarTy (IV v)) = f v
--- foldTy f (VarTy v) = f v
-
 -- | Looks for the free instantiation variables of a type
 fiv :: Type -> Set InstVariable
 fiv = foldTy fivFolder
@@ -267,32 +264,16 @@ fiv = foldTy fivFolder
     fivFolder (IVarTy v) = Just (Set.singleton v)
     fivFolder _ = Nothing
 
--- fiv (FunTy ty1 ty2) = fiv ty1 ++ fiv ty2
--- fiv (IVarTy v) = [v]
--- fiv (Forall _ ty) = fiv ty
--- -- go through all arguments and check for free instantiation variables
--- fiv (TyCstr _ args) = foldr (\x acc -> fiv x ++ acc) [] args
--- fiv _ = []
-
 -- | Finds all FIVs in a list of types
 fivs :: [Type] -> Set InstVariable
 fivs = foldMap fiv
 
--- | Looks for free unification variables of a types
+-- | Looks for free unification variables of a type
 fv :: Type -> Set TypeVariable
 fv = foldTy fvFolder
   where
     fvFolder (VarTy v) = Just $ Set.singleton v
     fvFolder _ = Nothing
-
--- fv (VarTy v) = Set.singleton v
--- fv (FunTy t1 t2) = (fv t1) `Set.union` (fv t2)
--- fv IntTy = Set.empty
--- fv BoolTy = Set.empty
-
--- | Calls inferTy to generate a type and the constraints
-genConstraints :: TypeEnv -> Expression -> Either String (Type, [Constraint])
-genConstraints env = runTc . inferType env
 
 {-
 ==================================================================
@@ -457,7 +438,7 @@ instantiateAux :: TypeEnv -> Type -> [Expression] -> InstMonad (Substitution Ins
 instantiateAux env (Forall (v : vs) ty) es = do
   -- generate fresh variables and substitution
   iv <- freshIV
-  let sub = SU (Map.singleton v (IVarTy iv))
+  let sub = Map.singleton v (IVarTy iv)
   instantiateAux env (subst sub (Forall vs ty)) es
 instantiateAux env (Forall [] ty) es = instantiateAux env ty es
 -- IARG - take a quick look at the argument
@@ -487,12 +468,12 @@ instantiateAux env (IVarTy v) (e : es) = do
   resTV <- freshIV
   -- argTV -> resTV
   let newType = FunTy (IVarTy argTV) (IVarTy resTV)
-      sub1 = SI (Map.singleton v newType)
+      sub1 = Map.singleton v newType
   -- check with new type
   (sub2, argTys, resTy) <- instantiateAux env newType (e : es)
   -- combine the substitutions
   return (sub2 `after` sub1, argTys, resTy)
-instantiateAux _ ty [] = return (empty, [], ty)
+instantiateAux _ ty [] = return (emptySubst, [], ty)
 instantiateAux env ty es = throwError $ "Fail: " <> show env <> "  " <> show ty <> "  " <> show es
 
 -- QUICK LOOK JUDGEMENTS // TODO: add other cases
@@ -508,9 +489,9 @@ qlArgument env e pTy =
         (_, retTy) <- lift $ instantiate env hTy es
         if isGuarded pTy || noFIVs retTy
           then lift $ mguQL pTy retTy
-          else return empty
+          else return emptySubst
     )
-    (\_ -> return empty) -- ignore errors in qlArgument, instead just return an empty substitution
+    (\_ -> return emptySubst) -- ignore errors in qlArgument, instead just return an empty substitution
   where
     (h, es) = case e of
       App h es -> (h, es)
@@ -547,8 +528,8 @@ qlHead _ _ = throwError "Failure: ql head doesn't allow arbitrary expressions (?
 
 -- 4. unification
 mguQL :: Type -> Type -> TcMonad (Substitution InstVariable)
-mguQL t1 (IVarTy (IV v)) = varAsgn v t1 -- return $ SI (Map.singleton v t1) -- // TODO: do free variable check
-mguQL (IVarTy (IV v)) t2 = varAsgn v t2 -- return $ SI (Map.singleton v t2)
+mguQL t1 (IVarTy (IV v)) = varAsgn v t1
+mguQL (IVarTy (IV v)) t2 = varAsgn v t2
 mguQL (FunTy s1 s2) (FunTy t1 t2) = do
   sub1 <- mguQL s1 t1
   sub2 <- mguQL (subst sub1 s2) (subst sub1 t2)
@@ -563,18 +544,18 @@ mguQL (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
                 sub <- mguQL (subst acc ty1) (subst acc ty2)
                 return $ acc `after` sub
             )
-            empty
+            emptySubst
             (zipWith (,) vec1 vec2)
         else throwError $ "Incompatible type constructors " <> show tc1 <> " and " <> show tc2
     _ -> throwError $ "Incompatible type constructors " <> show tc1 <> " and " <> show tc2
-mguQL _ _ = return empty
+mguQL _ _ = return emptySubst
 
 -- | Performs most general unification on mono-types. Used after inferType
 mgu :: Type -> Type -> Either String (Substitution TypeVariable)
 mgu ty1 ty2
   | not (isMono ty1) || not (isMono ty2) = throwError "yo fuck. non mono-types somehow got to mgu"
-mgu IntTy IntTy = return empty
-mgu BoolTy BoolTy = return empty
+mgu IntTy IntTy = return emptySubst
+mgu BoolTy BoolTy = return emptySubst
 mgu (FunTy l r) (FunTy l' r') = do
   s1 <- mgu l l'
   s2 <- mgu (subst s1 r) (subst s1 r')
@@ -589,19 +570,14 @@ mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
             sbst <- mgu ty1 ty2
             return (acc `after` sbst)
         )
-        empty
+        emptySubst
         (zipWith (,) vec1 vec2)
     Nothing -> throwError "type constructors are different; don't unify"
 mgu _ _ = throwError "types don't unify"
 
--- | Create substitution for variable // TODO: use similar method for InstVariables, maybe move to Subst type class
--- varAsgn :: MonadError [Char] m => TypeVariable -> Type -> m (Substitution TypeVariable)
--- varAsgn a t
---   | t == VarTy a = return empty
---   | a `Set.member` fv t =
---     throwError $
---       "occur check fails: " ++ show a ++ " in " ++ show t
---   | otherwise = return $ SU (Map.singleton a t)
+-- | Calls inferTy to generate a type and the constraints
+genConstraints :: TypeEnv -> Expression -> Either String (Type, [Constraint])
+genConstraints env = runTc . inferType env
 
 -- | Solve a list of constraints. Used after inferType
 solve :: [Constraint] -> Either String (Substitution TypeVariable)
@@ -611,7 +587,7 @@ solve =
         s2 <- mgu (subst s1 t1) (subst s1 t2)
         return (s2 `after` s1)
     )
-    empty
+    emptySubst
 
 typeInference :: TypeEnv -> Expression -> Either String Type
 typeInference env e = do

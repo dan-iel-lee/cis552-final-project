@@ -1,5 +1,20 @@
 # project-cis552
 
+
+## TODO type checking
+- figure out polymorphic mgu
+- ** Take context type variables into account
+- allow recursion?
+- figure out mguQL
+- figure out scoping for type variables in constraints
+- how does mgu work when you go under a forall binder?
+  -  
+
+## Why abandon GADT solution?
+I'm starting to realize that enforcing stratification at the implementation level is more of a headache
+than a help. It requires a lot of type trickery, which can be fun, but also painful. What do we get
+in return? Not much.
+
 This is the initial README file for your project. You should update it as you
 see fit.
 

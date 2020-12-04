@@ -8,7 +8,7 @@
 - figure out mguQL
 - figure out scoping for type variables in constraints
 - how does mgu work when you go under a forall binder?
-  - 
+  -  
 
 ## Why abandon GADT solution?
 I'm starting to realize that enforcing stratification at the implementation level is more of a headache

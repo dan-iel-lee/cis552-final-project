@@ -151,7 +151,7 @@ class (Ord a, Show a) => Subst a where
         "occur check fails: " ++ show a ++ " in " ++ show t
     | otherwise = return $ singSubst (wrap a) t
 
-substEnv :: Substitution a -> TypeEnv -> TypeEnv
+substEnv :: Subst a => Substitution a -> TypeEnv -> TypeEnv
 substEnv s (TE env as) = TE (Map.map (subst s) env) as
 
 -- subst ::
@@ -334,35 +334,23 @@ inferType env (Case e pes) = do
           inferType (env <> newEnv) exp
       )
       pes
-  -- coopt quick look to do the dirty work
-  -- throwError (show tys)
-  -- uniVar <- fresh
-  -- funTy <- Forall [uniVar] <$> genUniformFun uniVar (S $ lengthN tys)
-  -- let exps = map (Annot (Var "0")) tys
-  -- (argTys, retTy) <- instantiate env funTy exps
-  -- -- check argTys
-  -- forM_
-  --   (zip exps argTys)
-  --   ( \(exp, ty) -> do
-  --       checkType env exp ty
-  --   )
-
-  -- go through, instantiate
-  ty <-
-    foldM
-      ( \ty1 ty2 ->
-          evalStateT
-            ( do
-                ity1 <- inst ty1
-                ity2 <- inst ty2
-                sub <- lift $ mguQL ity1 ity2
-                return (subst sub ity2)
-            )
-            (IV 'K')
-      )
-      (head tys) -- UNSAFE
-      tys
-  return ty
+  foldM
+    ( \ty1 ty2 ->
+        evalStateT
+          ( do
+              ity1 <- inst ty1
+              ity2 <- inst ty2
+              -- // TODO: skolemize
+              sub <- lift $ mguQL ity1 ity2
+              let sty1 = subst sub ity1
+                  sty2 = subst sub ity2
+              equate sty1 sty2
+              return sty2
+          )
+          (IV 'K')
+    )
+    (head tys) -- UNSAFE
+    tys
 inferType _ _ = error "Unimplemented"
 
 -- | 'checktype env e ty' succeeds if e can be checked to to have
@@ -639,31 +627,33 @@ mguQL (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
             (zipWith (,) vec1 vec2)
         else throwError $ "Incompatible type constructors " <> show tc1 <> " and " <> show tc2
     _ -> throwError $ "Incompatible type constructors " <> show tc1 <> " and " <> show tc2
--- mguQL (Forall vs1 ty1) (Forall vs2 ty2) =
---   let res = mguQL ty1 ty2
---    in do
---         (sub, cstrts) <- listen res
---         case solve cstrts of -- ensure cstrts are solvable
---           Left err -> throwError err
---           Right _ ->
---             -- ensure
+mguQL (Forall vs1 ty1) (Forall vs2 ty2) = mguQL ty1 ty2
+-- let res = mguQL ty1 ty2
+--  in do
+--       (sub, cstrts) <- listen res
+--       case solve cstrts of -- ensure cstrts are solvable
+--         Left err -> throwError err
+--         Right _ -> return undefined
+-- ensure
 
 --         return undefined
 -- weirder stuff
-mguQL t1@(VarTy _) t2
-  | isMono t2 = equate t1 t2 >> return emptySubst
-  | otherwise = throwError "Types don't unify"
-mguQL t1 t2@(VarTy _)
-  | isMono t2 = equate t1 t2 >> return emptySubst
-  | otherwise = throwError "Types don't unify"
-mguQL IntTy IntTy = return emptySubst
-mguQL BoolTy BoolTy = return emptySubst
-mguQL t1 t2 = throwError $ "Types don't unify: " <> show t1 <> " " <> show t2
+-- mguQL t1@(VarTy _) t2
+--   | isMono t2 = equate t1 t2 >> return emptySubst
+--   | otherwise = throwError "Types don't unify"
+-- mguQL t1 t2@(VarTy _)
+--   | isMono t2 = equate t1 t2 >> return emptySubst
+--   | otherwise = throwError "Types don't unify"
+-- mguQL IntTy IntTy = return emptySubst
+-- mguQL BoolTy BoolTy = return emptySubst
+mguQL _ _ = return emptySubst
+
+-- mguQL t1 t2 = throwError $ "Types don't unify: " <> show t1 <> " " <> show t2
 
 -- | Performs most general unification on mono-types. Used after inferType
 mgu :: Type -> Type -> Either String (Substitution TypeVariable)
-mgu ty1 ty2
-  | not (isMono ty1) || not (isMono ty2) = throwError "yo fuck. non mono-types somehow got to mgu"
+-- mgu ty1 ty2
+--   | not (isMono ty1) || not (isMono ty2) = throwError "yo fuck. non mono-types somehow got to mgu"
 mgu IntTy IntTy = return emptySubst
 mgu BoolTy BoolTy = return emptySubst
 mgu (FunTy l r) (FunTy l' r') = do
@@ -683,7 +673,9 @@ mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
         emptySubst
         (zipWith (,) vec1 vec2)
     Nothing -> throwError "type constructors are different; don't unify"
-mgu _ _ = throwError "types don't unify"
+mgu (Forall xs ty1) (Forall ys ty2)
+  | length xs == length ys = mgu ty1 ty2
+mgu ty1 ty2 = throwError $ "types don't unify " <> show ty1 <> " " <> show ty2
 
 -- | Calls inferTy to generate a type and the constraints
 genConstraints :: TypeEnv -> Expression -> Either String (Type, [Constraint])

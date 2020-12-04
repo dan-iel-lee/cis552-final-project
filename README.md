@@ -5,6 +5,10 @@
 - do I want to separate out AppHead?
 - figure out how qlArgument works
 - figure out polymorphic mgu
+- ** Take context type variables into account
+- allow recursion?
+- figure out mguQL
+- figure out scoping for type variables in constraints
 
 ## Why abandon GADT solution?
 I'm starting to realize that enforcing stratification at the implementation level is more of a headache

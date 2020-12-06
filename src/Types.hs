@@ -162,6 +162,7 @@ data Expression
     IntExp Int
   | BoolExp Bool
   | Op Bop Expression Expression
+  | If Expression Expression Expression
   | Case Expression [(Pattern, Expression)]
   | Lam Variable Expression
   | App Expression [Expression] -- ((s e1) e2) e3

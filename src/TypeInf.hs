@@ -36,6 +36,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Type.Equality
 import Data.Vec.Lazy (Vec (VNil, (:::)), zipWith)
+import Parser
 import Test.HUnit
 import Types
 import Prelude hiding (zipWith)
@@ -351,6 +352,15 @@ inferType env (Case e pes) = do
     )
     (head tys) -- UNSAFE
     tys
+inferType env (Let x e1 e2) = do
+  tv <- fresh
+  let xTy = VarTy tv
+  resTy <- generalize env $ inferType (env |: (x, xTy)) e1
+  let innerTy = case resTy of
+        Forall vs ty -> ty
+        ty -> ty
+  equate innerTy xTy
+  inferType (env |: (x, resTy)) e2
 inferType _ _ = error "Unimplemented"
 
 -- | 'checktype env e ty' succeeds if e can be checked to to have
@@ -376,7 +386,7 @@ checkType env (Lam x e) t@(VarTy _) = do
   -- do the usual lambda check
   let newEnv = env |: (x, VarTy argTy)
   checkType newEnv e (VarTy resTy)
-checkType _ e@(Lam _ _) _ = throwError $ "Invalid type for lambda at: " <> show e -- // TODO: replace with pretty print
+checkType _ e@(Lam _ _) ty = throwError $ "Invalid type for lambda at: " <> display e <> " TYPE: " <> show ty -- // TODO: replace with pretty print
 -- APP
 checkType env (App h es) ty = do
   -- infer type of head
@@ -421,8 +431,9 @@ checkType env (Case e pes) retTy = do
     )
     pes
 checkType env e@(Annot _ _) ty' = checkType env (App e []) ty'
+checkType env e@(Var _) ty' = checkType env (App e []) ty'
 -- // TODO: all other cases
-checkType env e ty = throwError $ "Fail checkType: " <> show env <> " " <> show e <> " " <> show ty
+checkType env e ty = throwError $ "Fail checkType: " <> show env <> " EXP: " <> show e <> " TYPE: " <> show ty
 
 {-
 ==================================================================
@@ -502,7 +513,7 @@ instantiateAux env (IVarTy v) (e : es) = do
   -- combine the substitutions
   return (sub2 `after` sub1, argTys, resTy)
 instantiateAux _ ty [] = return (emptySubst, [], ty)
-instantiateAux env ty es = throwError $ "Fail: " <> show env <> "  " <> show ty <> "  " <> show es
+instantiateAux env ty es = throwError $ "Fail: " <> show env <> "  TYPE: " <> show ty <> "  EXP: " <> show es
 
 -- | Takes a quick look at an expression. If it is guarded or has no free instantiation variables
 -- then we're free to substitute
@@ -703,6 +714,7 @@ typeInference env e = do
 isValid :: Expression -> Bool
 isValid = undefined
 
+-- | Take a type, solve current constraints, and add Foralls for unbound variables
 generalize :: TypeEnv -> TcMonad Type -> TcMonad Type
 generalize env m = do
   (ty, constraints) <- listen m

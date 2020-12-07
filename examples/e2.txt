@@ -7,7 +7,20 @@ data T1 = L Bool | R Int
 -- "L" -> DC "L" [Bool]
 -- "R" -> DC "R" [Int]
 
-ex1 = L True 
+
+
+let f = \x -> case x of
+  0 -> 1
+  y -> f (y - 1)
+in 
+  f 5
+
+[f : ____ ] f 5
+
+
+
+
+ex1 = L True  -- let ex1 = (TC L :: Bool -> T1) True 
 
 case ex1 of 
   L b -> b 

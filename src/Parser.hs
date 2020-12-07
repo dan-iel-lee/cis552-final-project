@@ -1,5 +1,7 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -Wincomplete-patterns #-}
 
 module Parser where
@@ -82,7 +84,7 @@ constDataTypeNameP = wsP $ (++) <$> some (P.satisfy Char.isUpper) <*> many (P.sa
 -- - Forall case (need to add to the set)
 -- takes a list of allowed type variables
 typeauxP :: Set TypeVariable -> P.Parser Type
-typeauxP s = wsP $ intTyP <|> boolTyP <|> varTyP <|> forallP s <|> tyCstrP s
+typeauxP s = wsP $ intTyP <|> boolTyP <|> varTyP <|> forallP s <|> tyCstrP s <|> parenP (typeP s)
   where
     intTyP :: P.Parser Type
     intTyP = P.string "Int" $> IntTy
@@ -95,14 +97,14 @@ typeauxP s = wsP $ intTyP <|> boolTyP <|> varTyP <|> forallP s <|> tyCstrP s
 
     forallP :: Set TypeVariable -> P.Parser Type
     forallP s = do
-      vars <- kwP "forall" *> tyVarsP <* P.char '.'
+      vars <- wsP $ kwP "forall" *> tyVarsP <* P.char '.'
       let newS = s `Set.union` Set.fromList vars
-      typeP newS
+      Forall vars <$> (typeP newS)
 
     tyCstrP :: Set TypeVariable -> P.Parser Type
     tyCstrP s = do
       name <- wsP upperCaseString
-      tys <- many (typeP s)
+      tys <- many (wsP $ typeP s)
       return (TyCstrS name tys)
 
 tyVarsP :: P.Parser [TypeVariable]
@@ -115,7 +117,7 @@ funP :: P.Parser (Type -> Type -> Type)
 funP = wsP $ P.string "->" $> FunTy
 
 typeP :: Set TypeVariable -> P.Parser Type
-typeP s = typeauxP s `P.chainr1` funP
+typeP s = (typeauxP s `P.chainr1` funP) <|> parenP (typeP s)
 
 -- variables should be lower case
 varP :: P.Parser Variable
@@ -267,7 +269,8 @@ caseP =
   Case
     <$> (kwP "case" *> wsP exprP)
     <*> some ((,) <$> (wsP (P.char '|') *> wsP patternP) <*> (kwP "->" *> wsP exprP))
-    <* wsP (P.char ';') -- // TODO: any alternative?
+
+-- <* wsP (P.char ';') -- // TODO: any alternative?
 
 dcEP :: P.Parser Expression
 dcEP = CS <$> upperCaseString
@@ -322,12 +325,14 @@ tempAnnotParser = P.P $ \s -> do
   return ((varName, types), s''')
 
 decParser :: P.Parser Declaration
-decParser = P.P $ \s -> do
-  ((vname, types), s') <- P.doParse tempAnnotParser s
-  (vname', s'') <- P.doParse (varP <* kwP "=") s'
+decParser = do
+  -- // TODO: make this alternative to not require annotations
+  (vname, types) <- tempAnnotParser
+  vname' <- varP <* kwP "="
   guard $ vname == vname'
-  (expr, s''') <- P.doParse exprP s''
-  return (Dec vname (Annot expr types), s''')
+  expr <- exprP
+  wsP (P.char ';')
+  return (Dec vname (Annot expr types))
 
 exDec =
   "pred :: Nat -> Nat \
@@ -344,9 +349,9 @@ bigParser = do
   (tcs, dcs) <- constructorsP
   decs <- many decParser
   expr <- exprP
-  let letified = letify decs expr
-      -- // TODO: first constructify the DCs
+  let -- turn tcs list into map
       mtcs = mapifyH tcs
+      -- constructify the Data Constructors
       dcs' =
         mapM
           ( \(DC n ty) -> do
@@ -356,7 +361,17 @@ bigParser = do
           dcs
       constructed = do
         dcs'' <- dcs'
-        constructify (mapifyH tcs) (mapifyDC dcs'') letified
+        let mdcs = mapifyDC dcs'' -- turn dcs list into map
+        -- constructify the declarations
+        decs' <-
+          mapM
+            ( \(Dec x exp) -> do
+                exp' <- constructify mtcs mdcs exp
+                return (Dec x exp')
+            )
+            decs
+        let letified = letify decs' expr
+        constructify mtcs mdcs letified
   case constructed of
     Just c -> return c
     _ -> empty
@@ -380,7 +395,8 @@ constructify mh md (Case e bs) = do
     mapM
       ( \(p, exp) -> do
           p' <- constructifyP md p
-          return (p', exp)
+          exp' <- constructify mh md exp
+          return (p', exp')
       )
       bs
   return (Case e' bs')
@@ -450,6 +466,7 @@ constructifyA _ ty = return ty
 parseFile :: String -> IO ()
 parseFile path = do
   s <- readFile path
+  print s
   print (P.doParse bigParser s)
   return ()
 
@@ -475,80 +492,107 @@ exStr =
 -- -- PRETTY PRINTING
 -- -- ======================
 
--- instance PP Bop where
---   pp Plus = PP.text "+"
---   pp Minus = PP.text "-"
---   pp Times = PP.text "*"
---   pp Gt = PP.text ">"
---   pp Ge = PP.text ">="
---   pp Lt = PP.text "<"
---   pp Le = PP.text "<="
+instance PP Bop where
+  pp Plus = PP.text "+"
+  pp Minus = PP.text "-"
+  pp Times = PP.text "*"
+  pp Gt = PP.text ">"
+  pp Ge = PP.text ">="
+  pp Lt = PP.text "<"
+  pp Le = PP.text "<="
 
--- class PP a where
---   pp :: a -> Doc
+class PP a where
+  pp :: a -> Doc
 
--- display :: PP a => a -> String
--- display = show . pp
+display :: PP a => a -> String
+display = show . pp
 
--- instance PP Variable where
---   pp s = PP.text s
+instance PP Variable where
+  pp s = PP.text s
 
--- instance PP Expression where
---   pp (Var x) = PP.text x
---   pp (IntExp x) = PP.text (show x)
---   pp (BoolExp x) = if x then PP.text "true" else PP.text "false"
---   pp e@(Op {}) = ppPrec 0 e
---   -- pp (Case e s1 s2) =
---   --   PP.vcat
---   --     [ PP.text "if" <+> pp e <+> PP.text "then",
---   --       PP.nest 2 (pp s1),
---   --       PP.text "else",
---   --       PP.nest 2 (pp s2)
---   --     ]
---   pp e@(App _ _) = ppPrec 0 e
---   pp (Lam x e) =
---     PP.hang (PP.text "\\" <+> pp x <+> PP.text "->") 2 (pp e)
---   pp (Let x e1 e2) =
---     PP.vcat
---       [ PP.text "let" <+> pp x <+> PP.text "=",
---         PP.nest 2 (pp e1),
---         PP.text "in",
---         PP.nest 2 (pp e2)
---       ]
+instance PP Pattern where
+  pp (VarP v) = pp v
+  pp (IntP i) = PP.text (show i)
+  pp (BoolP b) = if b then PP.text "true" else PP.text "false"
+  pp (P dc ps) = PP.text (getDCName dc) <+> foldr ((<+>) . pp) (PP.text "") ps
+  pp _ = undefined
 
--- ppPrec n (Op bop e1 e2) =
---   parens (level bop < n) $
---     ppPrec (level bop) e1 <+> pp bop <+> ppPrec (level bop + 1) e2
--- ppPrec n (App e1 e2) =
---   parens (levelApp < n) $
---     ppPrec levelApp e1 <+> ppPrec (levelApp + 1) e2
--- ppPrec n e@(Lam _ _) =
---   parens (levelFun < n) $ pp e
--- ppPrec n e@(Case {}) =
---   parens (levelCase < n) $ pp e
--- ppPrec n e@(Let {}) =
---   parens (levelLet < n) $ pp e
--- ppPrec _ e' = pp e'
+instance PP Expression where
+  pp (Var x) = PP.text x
+  pp (IntExp x) = PP.text (show x)
+  pp (BoolExp x) = if x then PP.text "true" else PP.text "false"
+  pp (Annot e ty) = PP.vcat [pp ty, pp e]
+  pp (C dc) = PP.text (getDCName dc)
+  pp e@(Op {}) = ppPrec 0 e
+  pp (If e1 e2 e3) =
+    PP.vcat
+      [ PP.text "if" <+> pp e1 <+> PP.text "then",
+        PP.nest 2 (pp e2),
+        PP.text "else",
+        PP.nest 2 (pp e3)
+      ]
+  pp (Case e ps) =
+    PP.vcat $
+      (PP.text "case" <+> pp e) :
+      map (\(patt, expr) -> PP.nest 2 (PP.text "|" <+> pp patt <+> PP.text "->" <+> pp expr)) ps
+  pp e@(App _ _) = ppPrec 0 e
+  pp (Lam x e) =
+    PP.hang (PP.text "\\" <+> pp x <+> PP.text "->") 2 (pp e)
+  pp (Let x e1 e2) =
+    PP.vcat
+      [ PP.text "let" <+> pp x <+> PP.text "=",
+        PP.nest 2 (pp e1),
+        PP.text "in",
+        PP.nest 2 (pp e2)
+      ]
+  pp _ = undefined
 
--- parens b = if b then PP.parens else id
+instance PP (TypeConstructor k) where
+  pp (TC name _) = PP.text name
 
--- -- emulate the C++ precendence-level table
--- level :: Bop -> Int
--- level Plus = 3
--- level Minus = 3
--- level Times = 5
--- level _ = 8
+instance PP Type where
+  pp IntTy = PP.text "Int"
+  pp BoolTy = PP.text "Bool"
+  pp (FunTy ty1 ty2) = pp ty1 <+> PP.text "->" <+> pp ty2
+  pp (TyCstr tc vec) = pp tc <+> PP.hcat (map pp (Vec.toList vec))
+  pp (VarTy x) = PP.char x
+  pp (IVarTy (IV x)) = PP.text "IV" <+> PP.char x
+  pp (Forall vs ty) = PP.text "forall" <+> PP.hcat (map PP.char vs) <+> pp ty
+  pp _ = undefined
 
--- levelApp = 10
+ppPrec :: Int -> Expression -> Doc
+ppPrec n (Op bop e1 e2) =
+  parens (level bop < n) $
+    ppPrec (level bop) e1 <+> pp bop <+> ppPrec (level bop + 1) e2
+ppPrec n (App e1 e2) =
+  parens (levelApp < n) $ ppPrec levelApp e1 <+> foldr ((<+>) . ppPrec (levelApp + 1)) (PP.text "") e2
+ppPrec n e@(Lam _ _) =
+  parens (levelFun < n) $ pp e
+ppPrec n e@(Case {}) =
+  parens (levelCase < n) $ pp e
+ppPrec n e@(Let {}) =
+  parens (levelLet < n) $ pp e
+ppPrec _ e' = pp e'
 
--- levelCase = 2
+parens b = if b then PP.parens else id
 
--- levelLet = 1
+-- emulate the C++ precendence-level table
+level :: Bop -> Int
+level Plus = 3
+level Minus = 3
+level Times = 5
+level _ = 8
 
--- levelFun = 1 -- (= almost always needs parens)
+levelApp = 10
 
--- indented :: PP a => a -> String
--- indented = PP.render . pp
+levelCase = 2
+
+levelLet = 1
+
+levelFun = 1 -- (= almost always needs parens)
+
+indented :: PP a => a -> String
+indented = PP.render . pp
 
 -- -- Declaration unit tests
 

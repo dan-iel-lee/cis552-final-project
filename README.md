@@ -23,6 +23,8 @@ see fit.
 - Parsing
   - [x] update existing test cases with new syntax
   - [x] test cases for Datatype parsing and Declaration parsing
+  - [ ] parse types
+  - [ ] parse data constructors in expressions
 - Type checking
   - [ ] write test cases with examples
 - Evaluator

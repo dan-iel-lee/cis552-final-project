@@ -19,9 +19,12 @@
 
 module Types where
 
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Nat
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Type.Equality
-import Data.Vec.Lazy
+import Data.Vec.Lazy (Vec)
 
 -- TYPE LEVEL
 -- ==============================
@@ -38,9 +41,14 @@ data Type where
   BoolTy :: Type
   FunTy :: Type -> Type -> Type
   TyCstr :: forall k. TypeConstructor k -> Vec k Type -> Type -- strata is at least the argument stratas
+  -- TyCstr :: TypeConstructor -> Vec k Type -> Type -- strata is at least the argument stratas
   VarTy :: TypeVariable -> Type -- can be Mono or Rho
   IVarTy :: InstVariable -> Type
   Forall :: [TypeVariable] -> Type -> Type -- can be given Mono or Rho
+
+typesToFunTy :: NonEmpty Type -> Type
+typesToFunTy (x :| []) = x
+typesToFunTy (x :| (y : ys)) = FunTy x (typesToFunTy (y :| ys))
 
 isMono :: Type -> Bool
 isMono IntTy = True
@@ -76,6 +84,20 @@ data SArity :: Arity -> * where
   SZ :: SArity 'Z
   SS :: SArity k -> SArity (S k)
 
+data HArity = forall k. HA (SArity k)
+
+len :: [a] -> HArity
+len [] = HA SZ
+len (_ : xs) = case len xs of
+  HA sa -> HA (SS sa)
+
+makeHTC :: String -> HArity -> HTypeConstructor
+makeHTC s (HA sa) = HTC (TC s sa)
+
+-- instance Num (SArity k) where
+--   a + SZ = a
+--   a + (SS b) = SS (a + b)
+
 -- instance TestEquality SArity
 
 deriving instance Show (SArity k)
@@ -94,6 +116,16 @@ deriving instance Eq (SArity k)
 
 data TypeConstructor :: Arity -> * where
   TC :: String -> SArity k -> TypeConstructor k
+
+-- data TypeConstructor where
+--   TC :: String -> Arity -> TypeConstructor
+
+-- hidden arity type constructor
+data HTypeConstructor = forall k. HTC (TypeConstructor k)
+
+data HTCAndTVars = forall k. HH (TypeConstructor k, Vec k TypeVariable)
+
+deriving instance Show HTypeConstructor
 
 -- lift term equality to type equality
 instance TestEquality TypeConstructor where
@@ -174,3 +206,7 @@ var :: Variable -> Expression
 var v = App (Var v) []
 
 -- Annot Expression Type --
+
+-- MISCELLANEOUS
+foldableToSet :: (Ord a, Foldable f) => f a -> Set a
+foldableToSet = foldr Set.insert Set.empty

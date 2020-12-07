@@ -3,10 +3,18 @@ module Parser where
 import Control.Applicative (Alternative (..))
 import Control.Monad
 import qualified Data.Char as Char
+import Data.Functor (($>))
+import Data.List (genericLength)
 import qualified Data.List as List
+import Data.List.NonEmpty (NonEmpty ((:|)))
+import qualified Data.List.NonEmpty as NE
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.Vec.Lazy (Vec (VNil, (:::)))
+import qualified Data.Vec.Lazy as Vec
 import qualified ParserCombinators as P
-import Test.QuickCheck hiding (Fun)
 import Test.HUnit
+import Test.QuickCheck hiding (Fun)
 import Text.PrettyPrint (Doc, ($$), (<+>), (<>))
 import qualified Text.PrettyPrint as PP
 import Types
@@ -31,8 +39,8 @@ trim = List.dropWhileEnd Char.isSeparator
 
 varSpaceP :: P.Parser String
 varSpaceP = P.P $ \s -> do
-    (s', tl) <- P.doParse (some (P.satisfy isLowerOrSpace)) s
-    return (trim s', tl)
+  (s', tl) <- P.doParse (some (P.satisfy isLowerOrSpace)) s
+  return (trim s', tl)
 
 constDataNameP :: P.Parser String
 constDataNameP = wsP $ (++) <$> ((++) <$> some (P.satisfy Char.isUpper) <*> many (P.satisfy Char.isAlpha)) <*> varSpaceP
@@ -41,30 +49,37 @@ constDataNameP = wsP $ (++) <$> ((++) <$> some (P.satisfy Char.isUpper) <*> many
 constDataTypeNameP :: P.Parser String
 constDataTypeNameP = wsP $ (++) <$> some (P.satisfy Char.isUpper) <*> many (P.satisfy Char.isAlpha)
 
-typeP :: P.Parser String
-typeP = wsP $ varP <|> parenP constDataNameP
+-- typeP :: P.Parser String
+-- typeP = wsP $ varP <|> parenP constDataNameP
+
+-- TYPE PARSING // TODO !!!!
+-- ========
+-- take a type and set of variables IN SCOPE and parse the type
+-- // NOTE: what might be hard
+-- - Forall case (need to add to the set)
+-- takes a list of allowed type variables
+typeauxP :: Set TypeVariable -> P.Parser Type
+typeauxP _ = wsP $ intTyP <|> boolTyP
+  where
+    intTyP :: P.Parser Type
+    intTyP = P.string "Int" $> IntTy
+
+    boolTyP :: P.Parser Type
+    boolTyP = P.string "Bool" $> BoolTy
+
+    funTyP :: P.Parser Type
+    funTyP = undefined -- probably need to make a `chainr1` function
+
+-- parse a "->" operator
+funP :: P.Parser (Type -> Type -> Type)
+funP = wsP $ P.string "->" $> FunTy
+
+typeP :: Set TypeVariable -> P.Parser Type
+typeP s = typeauxP s `P.chainr1` funP
 
 -- variables should be lower case
 varP :: P.Parser Variable
 varP = wsP ((++) <$> some (P.satisfy Char.isLower) <*> many (P.satisfy Char.isAlpha))
-
--- | Data constructor parser
-constP :: P.Parser [DataConstructor]
-constP = P.P $ \s -> do -- input: data List a = Nil | Cons (List a)
-  (dataName, t) <- P.doParse (wsP (kwP "data" *> constDataNameP)) s -- gets "List a"
-  (s'', t') <- P.doParse (kwP "=") t -- removes =
-  (dataConsts, t'') <- P.doParse (many dataType) t' -- makes ([Nil], "Cons a (List a)")
-  -- need to parse last type and append it to dataconsts
-  -- need return statement with appended lists and rest of string
-  where dataType = P.P $ \str -> do
-            (str', tl) <- P.doParse (wsP constDataTypeNameP) str
-            (typeName, tl') <- P.doParse (many typeP) tl
-            (pipe, tl'') <- P.doParse (kwP "|") tl' -- throw away pipe
-            -- need to construct
---
---
---
---         
 
 boolP :: P.Parser Bool
 boolP =
@@ -85,6 +100,79 @@ char c = P.satisfy (== c)
 
 parenP :: P.Parser a -> P.Parser a
 parenP p = char '(' *> p <* char ')'
+
+-- ======================
+-- CONSTRUCTOR PARSING
+-- ======================
+
+upperCaseString :: P.Parser String
+upperCaseString = (:) <$> P.satisfy Char.isUpper <*> many (P.satisfy Char.isAlpha)
+
+-- type constructor parser
+tcP :: P.Parser HTCAndTVars
+tcP = do
+  tcName <- wsP $ kwP "data" *> upperCaseString
+  vars <- wsP $ many (wsP $ P.satisfy Char.isLower)
+  return (makeTC tcName vars)
+
+-- return (makeHTC tcName (len vars), vars)
+
+makeTC :: String -> [TypeVariable] -> HTCAndTVars
+makeTC name [] = HH (TC name SZ, VNil)
+makeTC name (v : vs) =
+  case makeTC name vs of
+    HH (TC _ sar, vec) -> HH (TC name (SS sar), v ::: vec)
+
+dcP :: (TypeConstructor k, Vec k TypeVariable) -> P.Parser DataConstructor
+dcP (tc, vars) = do
+  -- parse data constructor name
+  name <- wsP upperCaseString
+  -- parse argument types
+  dcs <- many (typeP (foldableToSet vars))
+  let retTy = TyCstr tc (fmap VarTy vars)
+      -- convert to function
+      funTy = typesToFunTy (NE.reverse $ retTy :| reverse dcs)
+      -- add universal quantification
+      dcTy = if null vars then funTy else Forall (Vec.toList vars) funTy
+  return (DC name dcTy)
+
+-- | Data constructor parser
+dcsP :: (TypeConstructor k, Vec k TypeVariable) -> P.Parser [DataConstructor]
+dcsP tcv = wsP (dcP tcv) `P.sepBy` wsP (P.char '|')
+
+constP :: P.Parser [DataConstructor]
+constP = do
+  HH tcStuff <- tcP
+  dcsP tcStuff
+
+constructorsP :: P.Parser [DataConstructor]
+constructorsP = do
+  dcss <- many constP
+  return $ concat dcss
+
+-- dcP (TC name ar, vars) = 1
+
+-- constP :: P.Parser [DataConstructor]
+-- constP = P.P $ \s -> do
+--   -- input: data List a = Nil | Cons (List a)
+--   (dataName, t) <- P.doParse (wsP (kwP "data" *> constDataNameP)) s -- gets "List a"
+--   (s'', t') <- P.doParse (kwP "=") t -- removes =
+--   (dataConsts, t'') <- P.doParse (many dataType) t' -- makes ([Nil], "Cons a (List a)")
+--   return undefined
+--   where
+--     -- need to parse last type and append it to dataconsts
+--     -- need return statement with appended lists and rest of string
+
+--     dataType = P.P $ \str -> do
+--       (str', tl) <- P.doParse (wsP constDataTypeNameP) str
+--       (typeName, tl') <- P.doParse (many typeP) tl
+--       (pipe, tl'') <- P.doParse (kwP "|") tl' -- throw away pipe
+--       return undefined -- // TODO
+--       -- need to construct
+--       --
+--       --
+--       --
+--       --
 
 -- ======================
 -- EXPRESSION PARSING
@@ -139,7 +227,9 @@ boolPP :: P.Parser Pattern
 boolPP = BoolP <$> wsP boolP
 
 dataP :: P.Parser Pattern
-dataP = P <$> constP <*> some patternP
+dataP = undefined
+
+-- dataP = P <$> constP <*> some patternP
 
 patternP :: P.Parser Pattern
 patternP = dataP <|> varPP <|> intPP <|> boolPP
@@ -148,10 +238,9 @@ caseP :: P.Parser Expression
 caseP =
   Case
     <$> (kwP "case" *> exprP <* kwP "of")
-    <*> some ((,) <$> patternP <*> (kwP "->" *> exprP)) 
+    <*> some ((,) <$> patternP <*> (kwP "->" *> exprP))
 
 exCase = "case x of 15 -> True  20 -> False"
-
 
 addOp :: P.Parser Bop
 addOp =
@@ -196,8 +285,10 @@ data Declaration = Dec Variable Expression
 
 decParser :: String -> P.Parser Declaration
 decParser = undefined
+
 parseDec :: String -> Maybe Declaration
 parseDec = undefined
+
 -- ==========================
 -- EXPRESSION PARSING
 -- ===========================

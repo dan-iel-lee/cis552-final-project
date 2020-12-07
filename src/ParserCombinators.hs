@@ -3,8 +3,7 @@
 -- CIS 552, University of Pennsylvania
 
 -- | A small, applicative parsing library
-module ParserCombinators
-where
+module ParserCombinators where
 
 import Control.Applicative (Alternative (..))
 import Control.Monad (guard)
@@ -27,6 +26,12 @@ instance Applicative Parser where
     (f, s') <- doParse p1 s
     (x, s'') <- doParse p2 s'
     return (f x, s'')
+
+instance Monad Parser where
+  return = pure
+  p >>= f = P $ \s -> do
+    (a, s') <- doParse p s
+    doParse (f a) s'
 
 instance Alternative Parser where
   empty = P $ const Nothing
@@ -115,6 +120,20 @@ p `chainl1` pop = foldl comb <$> p <*> rest
   where
     comb x (op, y) = x `op` y
     rest = many ((,) <$> pop <*> p)
+
+chainr1 :: Parser a -> Parser (a -> a -> a) -> Parser a
+p `chainr1` pop = aux <|> p
+  where
+    aux = do
+      a1 <- p
+      op <- pop
+      a2 <- p `chainr1` pop
+      return (op a1 a2)
+
+-- foldr comb <$> p <*> rest
+-- where
+--   comb (op, y) x = x `op` y
+--   rest = many ((,) <$> pop <*> p)
 
 -- | @chainl p pop x@ parses zero or more occurrences of @p@, separated by @pop@.
 -- If there are no occurrences of @p@, then @x@ is returned.

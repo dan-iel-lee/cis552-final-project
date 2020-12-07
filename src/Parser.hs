@@ -1,13 +1,21 @@
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# OPTIONS_GHC -Wincomplete-patterns #-}
+
 module Parser where
 
 import Control.Applicative (Alternative (..))
 import Control.Monad
+import Control.Monad.State (StateT, lift)
 import qualified Data.Char as Char
 import Data.Functor (($>))
 import Data.List (genericLength)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import qualified Data.List.NonEmpty as NE
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Maybe (isJust)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Vec.Lazy (Vec (VNil, (:::)))
@@ -19,12 +27,27 @@ import Text.PrettyPrint (Doc, ($$), (<+>), (<>))
 import qualified Text.PrettyPrint as PP
 import Types
 
+-- TYPES
+-- =====================
+
+-- hidden arity type constructor
+data HTypeConstructor = forall k. HTC (TypeConstructor k)
+
+deriving instance Show HTypeConstructor
+
+data HTCAndTVars = forall k. HH (TypeConstructor k, Vec k TypeVariable)
+
+type PMonad a = StateT ([DataConstructor], [HTypeConstructor]) P.Parser a
+
 -- HELPERS
 -- =====================
 
 -- parse something then consume all following whitespace
 wsP :: P.Parser a -> P.Parser a
 wsP p = p <* many (P.satisfy Char.isSpace)
+
+wsPStrict :: P.Parser a -> P.Parser a
+wsPStrict p = p <* some (P.satisfy Char.isSpace)
 
 -- a parser that looks for a particular string, then consumes all
 -- whitespace afterwards.
@@ -59,7 +82,7 @@ constDataTypeNameP = wsP $ (++) <$> some (P.satisfy Char.isUpper) <*> many (P.sa
 -- - Forall case (need to add to the set)
 -- takes a list of allowed type variables
 typeauxP :: Set TypeVariable -> P.Parser Type
-typeauxP _ = wsP $ intTyP <|> boolTyP
+typeauxP s = wsP $ intTyP <|> boolTyP <|> varTyP <|> forallP s <|> tyCstrP s
   where
     intTyP :: P.Parser Type
     intTyP = P.string "Int" $> IntTy
@@ -67,8 +90,25 @@ typeauxP _ = wsP $ intTyP <|> boolTyP
     boolTyP :: P.Parser Type
     boolTyP = P.string "Bool" $> BoolTy
 
-    funTyP :: P.Parser Type
-    funTyP = undefined -- probably need to make a `chainr1` function
+    varTyP :: P.Parser Type
+    varTyP = VarTy <$> P.satisfy (`Set.member` s)
+
+    forallP :: Set TypeVariable -> P.Parser Type
+    forallP s = do
+      vars <- kwP "forall" *> tyVarsP <* P.char '.'
+      let newS = s `Set.union` Set.fromList vars
+      typeP newS
+
+    tyCstrP :: Set TypeVariable -> P.Parser Type
+    tyCstrP s = do
+      name <- wsP upperCaseString
+      tys <- many (typeP s)
+      return (TyCstrS name tys)
+
+tyVarsP :: P.Parser [TypeVariable]
+tyVarsP = many (wsPStrict (P.satisfy Char.isLower))
+
+-- tyCstrP :: Set
 
 -- parse a "->" operator
 funP :: P.Parser (Type -> Type -> Type)
@@ -79,7 +119,7 @@ typeP s = typeauxP s `P.chainr1` funP
 
 -- variables should be lower case
 varP :: P.Parser Variable
-varP = wsP ((++) <$> some (P.satisfy Char.isLower) <*> many (P.satisfy Char.isAlpha))
+varP = wsP ((:) <$> P.satisfy Char.isLower <*> many (P.satisfy Char.isAlpha))
 
 boolP :: P.Parser Bool
 boolP =
@@ -140,39 +180,22 @@ dcP (tc, vars) = do
 dcsP :: (TypeConstructor k, Vec k TypeVariable) -> P.Parser [DataConstructor]
 dcsP tcv = wsP (dcP tcv) `P.sepBy` wsP (P.char '|')
 
-constP :: P.Parser [DataConstructor]
+constP :: P.Parser (HTypeConstructor, [DataConstructor])
 constP = do
-  HH tcStuff <- tcP
-  dcsP tcStuff
+  HH tcStuff@(tc, _) <- tcP
+  wsP $ P.char '='
+  dcs <- dcsP tcStuff
+  return (HTC tc, dcs)
 
-constructorsP :: P.Parser [DataConstructor]
+{-
+data List a = Nil | exists b. Cons b (List a)
+
+Cons : forall a. b -> List a -> List a
+ -}
+constructorsP :: P.Parser ([HTypeConstructor], [DataConstructor])
 constructorsP = do
   dcss <- many constP
-  return $ concat dcss
-
--- dcP (TC name ar, vars) = 1
-
--- constP :: P.Parser [DataConstructor]
--- constP = P.P $ \s -> do
---   -- input: data List a = Nil | Cons (List a)
---   (dataName, t) <- P.doParse (wsP (kwP "data" *> constDataNameP)) s -- gets "List a"
---   (s'', t') <- P.doParse (kwP "=") t -- removes =
---   (dataConsts, t'') <- P.doParse (many dataType) t' -- makes ([Nil], "Cons a (List a)")
---   return undefined
---   where
---     -- need to parse last type and append it to dataconsts
---     -- need return statement with appended lists and rest of string
-
---     dataType = P.P $ \str -> do
---       (str', tl) <- P.doParse (wsP constDataTypeNameP) str
---       (typeName, tl') <- P.doParse (many typeP) tl
---       (pipe, tl'') <- P.doParse (kwP "|") tl' -- throw away pipe
---       return undefined -- // TODO
---       -- need to construct
---       --
---       --
---       --
---       --
+  return $ foldr (\(h, ds) (hs, dss) -> (h : hs, ds ++ dss)) ([], []) dcss
 
 -- ======================
 -- EXPRESSION PARSING
@@ -217,6 +240,13 @@ letrecP =
     <*> (kwP "=" *> exprP)
     <*> (kwP "in" *> exprP)
 
+appP :: P.Parser Expression
+appP = do
+  h <- exprP
+  wsP $ P.char '.'
+  es <- some exprP
+  return $ App h es
+
 varPP :: P.Parser Pattern
 varPP = VarP <$> wsP varP
 
@@ -227,9 +257,7 @@ boolPP :: P.Parser Pattern
 boolPP = BoolP <$> wsP boolP
 
 dataP :: P.Parser Pattern
-dataP = undefined
-
--- dataP = P <$> constP <*> some patternP
+dataP = PS <$> wsP upperCaseString <*> many patternP
 
 patternP :: P.Parser Pattern
 patternP = dataP <|> varPP <|> intPP <|> boolPP
@@ -237,10 +265,17 @@ patternP = dataP <|> varPP <|> intPP <|> boolPP
 caseP :: P.Parser Expression
 caseP =
   Case
-    <$> (kwP "case" *> exprP <* kwP "of")
-    <*> some ((,) <$> patternP <*> (kwP "->" *> exprP))
+    <$> (kwP "case" *> wsP exprP <* kwP "of")
+    <*> some ((,) <$> (wsP (P.char '|') *> wsP patternP) <*> (kwP "->" *> wsP exprP))
+    <* wsP (P.char ';')
 
-exCase = "case x of 15 -> True  20 -> False"
+dcEP :: P.Parser Expression
+dcEP = CS <$> upperCaseString
+
+exCase =
+  "case n of \
+  \ | Z -> Z \
+  \ | S m -> m"
 
 addOp :: P.Parser Bop
 addOp =
@@ -263,66 +298,163 @@ exprP = sumP
     sumP = prodP `P.chainl1` (Op <$> addOp)
     prodP = compP `P.chainl1` (Op <$> mulOp)
     compP = factorP `P.chainl1` (Op <$> cmpOp)
-    -- appP = factorP `P.chainl1` wsP (pure App)
     factorP = wsP (parenP exprP) <|> baseP
     baseP =
-      boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP
+      appP <|> boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP
+        <|> caseP
+        <|> dcEP
         <|> varExprP
 
 -- ======================
 -- DECLARATION PARSING
 -- ========================
 
--- x = 3 => let x = 3
-{-
-x = 3
-
-y = fun X -> X
-
-y x
- -}
 data Declaration = Dec Variable Expression
 
-decParser :: String -> P.Parser Declaration
-decParser = undefined
+tempAnnotParser :: P.Parser (Variable, Type)
+tempAnnotParser = P.P $ \s -> do
+  (varName, s') <- P.doParse varP s
+  (_, s'') <- P.doParse (kwP "::") s'
+  (types, s''') <- P.doParse (typeP (Set.empty :: Set.Set TypeVariable)) s''
+  return ((varName, types), s''')
 
-parseDec :: String -> Maybe Declaration
-parseDec = undefined
+decParser :: P.Parser Declaration
+decParser = P.P $ \s -> do
+  ((vname, types), s') <- P.doParse tempAnnotParser s
+  (vname', s'') <- P.doParse (varP <* kwP "=") s'
+  guard $ vname == vname'
+  (expr, s''') <- P.doParse exprP s''
+  return (Dec vname (Annot expr types), s''')
 
--- ==========================
--- EXPRESSION PARSING
--- ===========================
+-- ==============
+-- Putting stuff together
+-- ================
 
--- example of an expression
--- factExp :: Expression
--- factExp =
---   Let
---     "FACT"
---     ( Lam
---         "X"
---         ( If
---             (Op Le (Var "X") (IntExp 1))
---             (IntExp 1)
---             (Op Times (Var "X") (App (Var "FACT") (Op Minus (Var "X") (IntExp 1))))
---         )
---     )
---     (App (Var "FACT") (IntExp 5))
+bigParser :: P.Parser Expression
+bigParser = do
+  (tcs, dcs) <- constructorsP
+  decs <- many decParser
+  expr <- exprP
+  let letified = letify decs expr
+      -- // TODO: first constructify the DCs
+      mtcs = mapifyH tcs
+      dcs' =
+        mapM
+          ( \(DC n ty) -> do
+              ty' <- constructifyA mtcs ty
+              return (DC n ty')
+          )
+          dcs
+      constructed = do
+        dcs'' <- dcs'
+        constructify (mapifyH tcs) (mapifyDC dcs'') letified
+  case constructed of
+    Just c -> return c
+    _ -> empty
 
--- -- we use chainl1 for associativity and precedence
--- exprP :: P.Parser Expression
--- exprP = sumP
---   where
---     sumP = prodP `P.chainl1` (Op <$> addOp)
---     prodP = compP `P.chainl1` (Op <$> mulOp)
---     compP = appP `P.chainl1` (Op <$> cmpOp)
---     appP = factorP `P.chainl1` wsP (pure App)
---     factorP = wsP (parenP exprP) <|> baseP
---     baseP =
---       boolExprP <|> intExprP <|> ifP <|> funP <|> letrecP
---         <|> varExprP
+letify :: [Declaration] -> Expression -> Expression
+letify [] e = e
+letify ((Dec v exp) : ds) e =
+  let res = letify ds e
+   in Let v exp res
 
--- parse :: String -> Maybe Expression
--- parse s = fst <$> P.doParse exprP s
+mapifyDC :: [DataConstructor] -> Map String DataConstructor
+mapifyDC = foldr (\dc@(DC name _) acc -> Map.insert name dc acc) Map.empty
+
+mapifyH :: [HTypeConstructor] -> Map String HTypeConstructor
+mapifyH = foldr (\ht@(HTC (TC name _)) acc -> Map.insert name ht acc) Map.empty
+
+constructify :: Map String HTypeConstructor -> Map String DataConstructor -> Expression -> Maybe Expression
+constructify mh md (Case e bs) = do
+  e' <- constructify mh md e
+  bs' <-
+    mapM
+      ( \(p, exp) -> do
+          p' <- constructifyP md p
+          return (p', exp)
+      )
+      bs
+  return (Case e' bs')
+constructify mh md (Annot e ty) = do
+  e' <- constructify mh md e
+  ty' <- constructifyA mh ty
+  return (Annot e' ty')
+constructify mh md (Lam v e) = do
+  e' <- constructify mh md e
+  return (Lam v e')
+constructify mh md (App e es) = do
+  e' <- constructify mh md e
+  es' <- mapM (constructify mh md) es
+  return (App e' es')
+constructify mh md (Let v e1 e2) = do
+  e1' <- constructify mh md e1
+  e2' <- constructify mh md e2
+  return (Let v e1' e2')
+constructify mh md (If e1 e2 e3) = do
+  e1' <- constructify mh md e1
+  e2' <- constructify mh md e2
+  e3' <- constructify mh md e3
+  return (If e1' e2' e3')
+constructify mh md (Op b e1 e2) = do
+  e1' <- constructify mh md e1
+  e2' <- constructify mh md e2
+  return (Op b e1' e2')
+constructify _ md (CS str) = C <$> Map.lookup str md
+constructify _ _ e = return e
+
+constructifyP :: Map String DataConstructor -> Pattern -> Maybe Pattern
+constructifyP m (PS name ps) = do
+  dc <- Map.lookup name m
+  ps' <- mapM (constructifyP m) ps
+  return (P dc ps')
+constructifyP m (P dc ps) = do
+  ps' <- mapM (constructifyP m) ps
+  return (P dc ps')
+constructifyP _ p = return p
+
+constructifyA :: Map String HTypeConstructor -> Type -> Maybe Type
+constructifyA m (TyCstrS name ts) = do
+  (HTC tc) <- Map.lookup name m
+  ts' <- mapM (constructifyA m) ts
+  constAux tc ts'
+  where
+    constAux :: TypeConstructor k -> [Type] -> Maybe Type
+    constAux tc@(TC _ SZ) [] = return $ TyCstr tc VNil
+    constAux (TC name' (SS k)) (t : ts) = do
+      resTy <- constAux (TC name' k) ts
+      case resTy of
+        TyCstr (TC _ k') vec -> return $ TyCstr (TC name (SS k')) (t ::: vec)
+        _ -> Nothing
+    constAux _ _ = Nothing
+constructifyA m (FunTy ty1 ty2) = do
+  ty1' <- constructifyA m ty1
+  ty2' <- constructifyA m ty2
+  return (FunTy ty1' ty2')
+constructifyA m (Forall vs ty) = do
+  ty' <- constructifyA m ty
+  return (Forall vs ty')
+constructifyA m (TyCstr tc tys) = do
+  tys' <- mapM (constructifyA m) tys
+  return (TyCstr tc tys')
+constructifyA _ ty = return ty
+
+parseFile :: String -> IO ()
+parseFile path = do
+  s <- readFile path
+  print (P.doParse bigParser s)
+  return ()
+
+parseStr :: String -> IO ()
+parseStr str = print (P.doParse bigParser str)
+
+exStr :: String
+exStr =
+  "data Nat = Z | S Nat\
+  \ pred :: Nat -> Nat \
+  \ pred = \\n -> case n of\
+  \ | Z -> Z \
+  \ | S m -> m; \
+  \ pred . (S . (S . Z))"
 
 -- -- TESTING
 -- ex1_S = "y = fun x -> x \ny 3"

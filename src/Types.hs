@@ -40,11 +40,12 @@ data Type where
   IntTy :: Type
   BoolTy :: Type
   FunTy :: Type -> Type -> Type
-  TyCstr :: forall k. TypeConstructor k -> Vec k Type -> Type -- strata is at least the argument stratas
-  -- TyCstr :: TypeConstructor -> Vec k Type -> Type -- strata is at least the argument stratas
-  VarTy :: TypeVariable -> Type -- can be Mono or Rho
+  TyCstr :: forall k. TypeConstructor k -> Vec k Type -> Type
+  TyCstrS :: String -> [Type] -> Type -- PARSING PURPOSES ONLY
+  -- TyCstr :: TypeConstructor -> Vec k Type -> Type
+  VarTy :: TypeVariable -> Type
   IVarTy :: InstVariable -> Type
-  Forall :: [TypeVariable] -> Type -> Type -- can be given Mono or Rho
+  Forall :: [TypeVariable] -> Type -> Type
 
 typesToFunTy :: NonEmpty Type -> Type
 typesToFunTy (x :| []) = x
@@ -91,8 +92,8 @@ len [] = HA SZ
 len (_ : xs) = case len xs of
   HA sa -> HA (SS sa)
 
-makeHTC :: String -> HArity -> HTypeConstructor
-makeHTC s (HA sa) = HTC (TC s sa)
+-- makeHTC :: String -> HArity -> HTypeConstructor
+-- makeHTC s (HA sa) = HTC (TC s sa)
 
 -- instance Num (SArity k) where
 --   a + SZ = a
@@ -120,12 +121,7 @@ data TypeConstructor :: Arity -> * where
 -- data TypeConstructor where
 --   TC :: String -> Arity -> TypeConstructor
 
--- hidden arity type constructor
-data HTypeConstructor = forall k. HTC (TypeConstructor k)
-
-data HTCAndTVars = forall k. HH (TypeConstructor k, Vec k TypeVariable)
-
-deriving instance Show HTypeConstructor
+-- deriving instance Show HTypeConstructor
 
 -- lift term equality to type equality
 instance TestEquality TypeConstructor where
@@ -159,6 +155,7 @@ data DataConstructor = DC {getDCName :: String, getType :: Type} -- uppercase
 
 data Pattern
   = P DataConstructor [Pattern]
+  | PS String [Pattern] -- PARSING PURPOSE ONLY
   | VarP Variable
   | IntP Int
   | BoolP Bool
@@ -188,8 +185,9 @@ type Variable = String -- lowercase
 data Expression
   = Var Variable
   | -- | user defined data constructors
-    Annot Expression Type
+    Annot Expression Type -- (x :: Int)
   | C DataConstructor
+  | CS String -- PARSING ONLY
   | -- | primitives
     IntExp Int
   | BoolExp Bool

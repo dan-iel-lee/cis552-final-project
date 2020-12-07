@@ -80,6 +80,7 @@ data Constraint = Equal Type Type
 
 -- | Generates an equality constraint
 -- equate :: Type -> Type -> TcMonad ()
+equate :: MonadWriter [Constraint] m => Type -> Type -> m ()
 equate t1 t2
   | t1 == t2 = return ()
   | otherwise = tell [Equal t1 t2]
@@ -152,6 +153,7 @@ class (Ord a, Show a) => Subst a where
         "occur check fails: " ++ show a ++ " in " ++ show t
     | otherwise = return $ singSubst (wrap a) t
 
+-- | Helper function to perform a substitution on a typing environment
 substEnv :: Subst a => Substitution a -> TypeEnv -> TypeEnv
 substEnv s (TE env as) = TE (Map.map (subst s) env) as
 

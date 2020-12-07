@@ -21,6 +21,11 @@ type Environment = Map Variable Value
 
 type StepResult = Either String (Either (Environment, Expression) Value)
 
+-- data StepResult =
+--   Err String
+--   | Step Environment, Expression
+--   | Val Value
+
 data Value
   = IntVal Int
   | BoolVal Bool
@@ -98,6 +103,7 @@ evalBounded (App lam (x : xs)) s = do
   case (t1, t2) of
     (_, Left (s', x')) -> retStep (App lam (x' : xs)) s'
     (Right (UserDT d l), Right v) -> retVal $ UserDT d (l ++ [v])
+    -- retStep (App (UserDT d (l ++ [v]))) xs
     (Right (FunVal g), Right v) -> case g v of
       Left _ -> g v -- threw an error
       Right (Left (s', lam')) -> return $ Left (s', App lam' xs) -- apply function one round

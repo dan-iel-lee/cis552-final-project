@@ -567,55 +567,61 @@ exStr =
 -- quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
 -- quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
 
--- instance Arbitrary Expression where
---   arbitrary = sized genExp
---   shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
---   -- shrink (Case e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
---   shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
---   shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
---   shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
---   shrink _ = []
+instance Arbitrary Expression where
+  arbitrary = sized genExp
+  shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  -- shrink (Case e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
+  shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
+  shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  shrink _ = []
 
--- genPattern :: Gen Pattern
--- genPattern =
---   oneof
---     [ fmap VarP arbVar,
---       fmap IntP arbNat,
---       fmap BoolP arbitrary
---     ]
+genPattern :: Gen Pattern
+genPattern =
+  oneof
+    [ fmap VarP arbVar,
+      fmap IntP arbNat,
+      fmap BoolP arbitrary
+    ]
 
--- genType :: Int -> Gen Type
--- genType 0 = oneof [IntTy, BoolTy]
--- genType n = frequency
---               [ (1, IntTy), (1, BoolTy), (2, liftM2 Fun (genType n') (genType n'))]
---             where n' = n `div` 2
+genType :: Int -> Gen Type
+genType 0 = elements [IntTy, BoolTy]
+genType n =
+  frequency
+    [(1, return IntTy), (1, return BoolTy), (2, liftM2 FunTy (genType n') (genType n'))]
+  where
+    n' = n `div` 2
 
--- genExp :: Int -> Gen Expression
--- genExp 0 =
---   oneof
---     [ fmap Var arbVar,
---       fmap IntExp arbNat,
---       fmap BoolExp arbitrary
---     ]
--- genExp n =
---   frequency
---     [ (1, fmap Var arbVar),
---       (1, fmap IntExp arbNat),
---       (1, fmap BoolExp arbitrary),
---       (7, liftM3 Op arbitrary (genExp n') (genExp n')),
---       (4, liftM2 Case (genExp n') (replicate n' (genPattern, genExp n'))),
---       (7, liftM2 Lam arbVar (genExp n')),
---       (4, liftM2 App (genExp n') (replicate n' (genExp n'))),
---       (7, liftM3 Let arbVar (genExp n') (genExp n'))
---     ]
---   where
---     n' = n `div` 2
+genExp :: Int -> Gen Expression
+genExp 0 =
+  oneof
+    [ fmap Var arbVar,
+      fmap IntExp arbNat,
+      fmap BoolExp arbitrary
+    ]
+genExp n =
+  frequency
+    [ (1, fmap Var arbVar),
+      (1, fmap IntExp arbNat),
+      (1, fmap BoolExp arbitrary),
+      (7, liftM3 Op arbitrary (genExp n') (genExp n')),
+      (4, liftM2 Case (genExp n') patternList),
+      (7, liftM2 Lam arbVar (genExp n')),
+      (4, liftM2 App (genExp n') exprList),
+      (7, liftM3 Let arbVar (genExp n') (genExp n'))
+    ]
+  where
+    n' = n `div` 2
+    patternList :: Gen [(Pattern, Expression)]
+    patternList = foldr (liftM2 (:)) (return []) (replicate n' $ liftM2 (,) genPattern (genExp n'))
+    exprList :: Gen [Expression]
+    exprList = foldr (liftM2 (:)) (return []) $ replicate n' (genExp n')
 
--- instance Arbitrary Bop where
---   arbitrary = elements [Plus ..]
+instance Arbitrary Bop where
+  arbitrary = elements [Plus ..]
 
--- arbNat :: Gen Int
--- arbNat = liftM abs arbitrary
+arbNat :: Gen Int
+arbNat = liftM abs arbitrary
 
--- arbVar :: Gen Variable
--- arbVar = elements $ map pure ['a' .. 'z']
+arbVar :: Gen Variable
+arbVar = elements $ map pure ['a' .. 'z']

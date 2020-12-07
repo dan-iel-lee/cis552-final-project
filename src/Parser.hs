@@ -265,17 +265,17 @@ patternP = dataP <|> varPP <|> intPP <|> boolPP
 caseP :: P.Parser Expression
 caseP =
   Case
-    <$> (kwP "case" *> wsP exprP <* kwP "of")
+    <$> (kwP "case" *> wsP exprP)
     <*> some ((,) <$> (wsP (P.char '|') *> wsP patternP) <*> (kwP "->" *> wsP exprP))
-    <* wsP (P.char ';')
+    <* wsP (P.char ';') -- // TODO: any alternative?
 
 dcEP :: P.Parser Expression
 dcEP = CS <$> upperCaseString
 
 exCase =
-  "case n of \
+  "case n \
   \ | Z -> Z \
-  \ | S m -> m"
+  \ | S m -> m ;"
 
 addOp :: P.Parser Bop
 addOp =
@@ -293,14 +293,17 @@ cmpOp =
     <|> kwP ">" *> pure Gt
 
 exprP :: P.Parser Expression
-exprP = sumP
+exprP = wsP appPP
   where
+    -- exprP = sumP
+
+    appPP = (App <$> wsP sumP <*> some exprP) <|> sumP
     sumP = prodP `P.chainl1` (Op <$> addOp)
     prodP = compP `P.chainl1` (Op <$> mulOp)
     compP = factorP `P.chainl1` (Op <$> cmpOp)
     factorP = wsP (parenP exprP) <|> baseP
     baseP =
-      appP <|> boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP
+      {-appP <|> -} boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP
         <|> caseP
         <|> dcEP
         <|> varExprP
@@ -309,7 +312,7 @@ exprP = sumP
 -- DECLARATION PARSING
 -- ========================
 
-data Declaration = Dec Variable Expression
+data Declaration = Dec Variable Expression deriving (Show)
 
 tempAnnotParser :: P.Parser (Variable, Type)
 tempAnnotParser = P.P $ \s -> do
@@ -325,6 +328,12 @@ decParser = P.P $ \s -> do
   guard $ vname == vname'
   (expr, s''') <- P.doParse exprP s''
   return (Dec vname (Annot expr types), s''')
+
+exDec =
+  "pred :: Nat -> Nat \
+  \ pred = \\n -> case n\
+  \ | Z -> Z \
+  \ | S m -> m ;"
 
 -- ==============
 -- Putting stuff together
@@ -451,10 +460,10 @@ exStr :: String
 exStr =
   "data Nat = Z | S Nat\
   \ pred :: Nat -> Nat \
-  \ pred = \\n -> case n of\
+  \ pred = \\n -> case n\
   \ | Z -> Z \
-  \ | S m -> m; \
-  \ pred . (S . (S . Z))"
+  \ | S m -> m ; \
+  \ pred (S (S Z))"
 
 -- -- TESTING
 -- ex1_S = "y = fun x -> x \ny 3"

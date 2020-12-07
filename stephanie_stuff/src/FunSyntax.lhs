@@ -85,7 +85,6 @@ language.
 > kwP :: String -> P.Parser String
 > kwP s = wsP $ P.string s
 
-
 > varP :: P.Parser Variable
 > varP  = wsP (some (P.satisfy Char.isUpper))
 
@@ -163,9 +162,6 @@ language.
 
 > parse :: String -> Maybe Expression
 > parse s = fst <$> P.doParse exprP s
-
-
-
 
 
 FUN Printer

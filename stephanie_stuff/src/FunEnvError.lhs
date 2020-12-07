@@ -56,6 +56,8 @@ Now let's look at the function for evaluating binary operators.  Most of the
 cases just return the appropriate value. However, the last case uses the
 `throwError` function to report the problem.
 
+[Stays the same]
+
 > evalB :: Bop -> Value -> Value -> Either String Value
 > evalB Plus   (IntVal i1) (IntVal i2) = return $ IntVal  (i1 + i2)
 > evalB Minus  (IntVal i1) (IntVal i2) = return $ IntVal  (i1 - i2)
@@ -74,6 +76,7 @@ strings.
 Furthermore, we can throw an error if there is no value for a variable
 available in the environment.
 
+[Stays the same]
 > vLookup :: Variable -> Map Variable Value -> Either String Value
 > vLookup x env =
 >   case Map.lookup x env of

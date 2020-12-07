@@ -2,12 +2,19 @@
 
 module Eval where
 
---import Parser
-
 import Control.Monad.Except
 import Control.Monad.Fix
 import Data.Map as Map
+import Parser
 import Test.HUnit
+import Test.QuickCheck
+  ( Args (maxSize, maxSuccess),
+    Property,
+    Testable,
+    quickCheckWith,
+    stdArgs,
+    (==>),
+  )
 import Types
 
 type Environment = Map Variable Value
@@ -33,7 +40,7 @@ instance Eq Value where
 instance Show Value where
   show (IntVal i) = show i
   show (BoolVal b) = show b
-  show (UserDT dt l) = getDCName dt ++ " " ++ Prelude.foldr (\x acc -> show x ++ acc) [] l
+  show (UserDT dt l) = getDCName dt ++ " " ++ Prelude.foldr (\x acc -> show x ++ " " ++ acc) [] l
   show (FunVal _) = "<function>" -- can't show functions
 
 vLookup :: Variable -> Map Variable Value -> StepResult
@@ -223,22 +230,22 @@ testCasingSimple =
 
 testUserDefined =
   TestList
-    [ "let x = P 3 4 in x"
+    [ "let x = P in x"
         ~: eval (Let "x" (C (DC "P" IntTy)) (Var "x")) Map.empty ~?= Right (UserDT (DC "P" IntTy) [])
+        -- "let x = P 3 4 in x"
+        --   ~: eval (Let "x" (App (C (DC "P" IntTy)) [IntExp 3, IntExp 4]) (Var "x")) Map.empty ~?= Right (UserDT (DC "P" IntTy) [IntVal 3])
     ]
 
 -- -- quickcheck property
 -- -- Can be evaluated property
--- prop_stepExec :: Expression -> Property
--- prop_stepExec e =
---   isValid e ==> not (isError e1)
---   where
---     x = evalBounded e Map.empty
+isValid :: Expression -> Bool
+isValid = const True
 
---     -- is terminating error
---     isError :: Either (Environment, Expression) (Either String Value) -> Bool
---     isError (Right (Left _)) = True
---     isError _ = False
+prop_stepExec :: Expression -> Property
+prop_stepExec e =
+  isValid e ==> not (isErr x)
+  where
+    x = evalBounded e Map.empty
 
--- quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
--- quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
+quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
+quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}

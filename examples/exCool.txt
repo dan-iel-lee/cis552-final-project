@@ -1,0 +1,18 @@
+injl :: forall a b . a -> (forall r . (a -> r) -> (b -> r) -> r)
+injl = \x -> \f -> \g -> f x ;
+
+injr :: forall a b . b -> (forall r . (a -> r) -> (b -> r) -> r)
+injr = \y -> \f -> \g -> g y ;
+
+
+casee :: forall a b . (forall r . (a -> r) -> (b -> r) -> r) -> (a -> r) -> (b -> r) -> r
+casee = \s -> \f -> \g -> s f g ;
+
+
+exL :: forall r . (Int -> r) -> (Bool -> r) -> r
+exL = injl 1 ;
+
+isTrue :: (forall r . (Int -> r) -> (Bool -> r) -> r) -> r
+isTrue = \s -> casee s (\x -> x >= 1) (\b -> b) ;
+
+isTrue exL

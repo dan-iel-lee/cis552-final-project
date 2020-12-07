@@ -300,7 +300,7 @@ exprP = wsP appPP
   where
     -- exprP = sumP
 
-    appPP = (App <$> wsP sumP <*> some exprP) <|> sumP
+    appPP = (App <$> wsP sumP <*> some (sumP <|> parenP exprP)) <|> sumP
     sumP = prodP `P.chainl1` (Op <$> addOp)
     prodP = compP `P.chainl1` (Op <$> mulOp)
     compP = factorP `P.chainl1` (Op <$> cmpOp)
@@ -463,12 +463,14 @@ constructifyA m (TyCstr tc tys) = do
   return (TyCstr tc tys')
 constructifyA _ ty = return ty
 
-parseFile :: String -> IO ()
+parseFile :: String -> IO Expression
 parseFile path = do
   s <- readFile path
   print s
-  print (P.doParse bigParser s)
-  return ()
+  let p = P.doParse bigParser s
+  case p of
+    Just (exp, _) -> print exp >> return exp
+    _ -> empty
 
 parseStr :: String -> IO ()
 parseStr str = print (P.doParse bigParser str)

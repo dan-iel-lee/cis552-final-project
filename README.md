@@ -9,6 +9,7 @@
 - figure out scoping for type variables in constraints
 - how does mgu work when you go under a forall binder?
   -  
+- [ ] combine InstMonad with TcMonad
 
 ## Why abandon GADT solution?
 I'm starting to realize that enforcing stratification at the implementation level is more of a headache
@@ -23,8 +24,9 @@ see fit.
 - Parsing
   - [x] update existing test cases with new syntax
   - [x] test cases for Datatype parsing and Declaration parsing
-  - [ ] parse types
-  - [ ] parse data constructors in expressions
+  - [x] parse types
+  - [x] parse data constructors in expressions
+  - [ ] ignore comments
 - Type checking
   - [ ] write test cases with examples
 - Evaluator

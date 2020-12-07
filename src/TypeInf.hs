@@ -184,7 +184,9 @@ instance Subst TypeVariable where
   subst m t@(VarTy a) = fromMaybe t (Map.lookup a m)
   subst m (FunTy s1 s2) = FunTy (subst m s1) (subst m s2)
   subst s (Forall vs t) =
-    let resTy = subst s t
+    -- remove bound variables from substitution
+    let newS = Map.withoutKeys s (Set.fromList vs)
+        resTy = subst newS t
      in Forall vs resTy
   subst s (TyCstr tc vec) = TyCstr tc (fmap (subst s) vec)
   subst _ t = t
@@ -252,6 +254,7 @@ foldTy f ty = case f ty of
 fiv :: Type -> Set InstVariable
 fiv = foldTy fivFolder
   where
+    fivFolder :: Type -> Maybe (Set InstVariable)
     fivFolder (IVarTy v) = Just (Set.singleton v)
     fivFolder _ = Nothing
 
@@ -264,6 +267,9 @@ fv :: Type -> Set TypeVariable
 fv = foldTy fvFolder
   where
     fvFolder (VarTy v) = Just $ Set.singleton v
+    fvFolder (Forall vs ty) =
+      let res = fv ty
+       in return $ res `Set.difference` Set.fromList vs
     fvFolder _ = Nothing
 
 {-
@@ -337,23 +343,28 @@ inferType env (Case e pes) = do
           inferType (env <> newEnv) exp
       )
       pes
-  foldM
-    ( \ty1 ty2 ->
-        evalStateT
-          ( do
-              ity1 <- inst ty1
-              ity2 <- inst ty2
-              -- // TODO: skolemize
-              sub <- lift $ mguQL ity1 ity2
-              let sty1 = subst sub ity1
-                  sty2 = subst sub ity2
-              equate sty1 sty2
-              return sty2
-          )
-          (IV 'K')
-    )
-    (head tys) -- UNSAFE
-    tys
+  -- fresh type variable
+  alpha <- VarTy <$> fresh
+  -- make sure every type is equal
+  mapM_ (equate alpha) tys
+  return alpha
+-- foldM
+--   ( \ty1 ty2 ->
+--       evalStateT
+--         ( do
+--             ity1 <- inst ty1
+--             ity2 <- inst ty2
+--             -- // TODO: skolemize
+--             sub <- lift $ mguQL ity1 ity2
+--             let sty1 = subst sub ity1
+--                 sty2 = subst sub ity2
+--             equate sty1 sty2
+--             return sty2
+--         )
+--         (IV 'K')
+--   )
+--   (head tys) -- UNSAFE
+--   tys
 inferType env (Let x e1 e2) = do
   tv <- fresh
   let xTy = VarTy tv
@@ -515,7 +526,7 @@ instantiateAux env (IVarTy v) (e : es) = do
   -- combine the substitutions
   return (sub2 `after` sub1, argTys, resTy)
 instantiateAux _ ty [] = return (emptySubst, [], ty)
-instantiateAux env ty es = throwError $ "Fail: " <> show env <> "  TYPE: " <> show ty <> "  EXP: " <> show es
+instantiateAux env ty es = throwError $ "Fail: " <> show env <> "  TYPE: " <> display ty <> "  EXP: " <> show (map display es)
 
 -- | Takes a quick look at an expression. If it is guarded or has no free instantiation variables
 -- then we're free to substitute
@@ -673,7 +684,7 @@ mgu (FunTy l r) (FunTy l' r') = do
   s1 <- mgu l l'
   s2 <- mgu (subst s1 r) (subst s1 r')
   return $ s2 `after` s1
-mgu (VarTy a) t = varAsgn a t
+mgu (VarTy a) t = varAsgn a t -- // TODO: do we need to inforce mono here?
 mgu t (VarTy a) = varAsgn a t
 mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
   case tc1 `testEquality` tc2 of
@@ -709,8 +720,49 @@ solve =
 typeInference :: TypeEnv -> Expression -> Either String Type
 typeInference env e = do
   (ty, constraints) <- genConstraints env e
+  -- throwError $ display ty <> " CSTRS: " <> show constraints
   s <- solve constraints
   return (subst s ty)
+
+top :: FilePath -> IO ()
+top fp = do
+  exp <- parseFile fp
+  let res = typeInference emptyEnv exp
+  print res
+
+exp =
+  Let
+    "head"
+    ( Annot
+        ( Lam
+            "l"
+            ( Case
+                (Var "l")
+                [(P (DC {getDCName = "Nil", getType = Forall "a" (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))}) [], C (DC {getDCName = "Nothing", getType = Forall "a" (TyCstr (TC "Maybe" (SS SZ)) (VarTy 'a' ::: VNil))})), (P (DC {getDCName = "Cons", getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))}) [VarP "x", VarP "xs"], App (C (DC {getDCName = "Just", getType = Forall "a" (FunTy (VarTy 'a') (TyCstr (TC "Maybe" (SS SZ)) (VarTy 'a' ::: VNil)))})) [Var "x"])]
+            )
+        )
+        (Forall "a" (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "Maybe" (SS SZ)) (VarTy 'a' ::: VNil))))
+    )
+    ( App
+        (Var "head")
+        [ App
+            ( C
+                ( DC
+                    { getDCName = "Cons",
+                      getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))
+                    }
+                )
+            )
+            [ IntExp 1,
+              C
+                ( DC
+                    { getDCName = "Nil",
+                      getType = Forall "a" (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))
+                    }
+                )
+            ]
+        ]
+    )
 
 -- | Used by Eval to filter ill-typed expressions
 isValid :: Expression -> Bool
@@ -819,6 +871,12 @@ idsCtx :: TypeEnv
 idsCtx = TE (Map.fromList [("id", idTy), ("ids", idsTy)]) Set.empty
 
 ex2 :: Expression
+-- id :: forall a. a -> a
+-- ids :: [forall a. a -> a]
+-- Cons id Nil :: (forall a [a -> a])
+-- id : ids
+-- Cons :: a -> List a -> List a
+-- (forall a. a -> a) -> List (forall .....)
 ex2 = App consExp [var "id", var "ids"]
 
 -- PATTERN MATCHING EXAMPLES
@@ -841,3 +899,23 @@ exCase2' = App exCase1 [IntExp 1]
 
 runTc :: TcMonad a -> Either String (a, [Constraint])
 runTc m = evalStateT (runWriterT m) 'a'
+
+-- MISCELLANEOUS
+ex =
+  Let
+    "id"
+    ( Annot
+        (Lam "x" (Var "x"))
+        (Forall "a" (FunTy (VarTy 'a') (VarTy 'a')))
+    )
+    ( Let
+        "ids"
+        ( Annot
+            (App (C (DC {getDCName = "Cons", getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))})) [Var "id", C (DC {getDCName = "Nil", getType = Forall "a" (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))})])
+            (TyCstr (TC "List" (SS SZ)) (Forall "a" (FunTy (VarTy 'a') (VarTy 'a')) ::: VNil))
+        )
+        ( App
+            (C (DC {getDCName = "Cons", getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))}))
+            [Var "id", Var "ids"]
+        )
+    )

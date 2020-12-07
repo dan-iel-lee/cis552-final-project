@@ -4,29 +4,6 @@
 
 -- | A small, applicative parsing library
 module ParserCombinators
-  ( Parser,
-    doParse,
-    get,
-    eof,
-    filter,
-    parse,
-    parseFromFile,
-    satisfy,
-    alpha,
-    digit,
-    upper,
-    lower,
-    space,
-    char,
-    string,
-    int,
-    chainl1,
-    chainl,
-    choice,
-    between,
-    sepBy1,
-    sepBy,
-  )
 where
 
 import Control.Applicative (Alternative (..))

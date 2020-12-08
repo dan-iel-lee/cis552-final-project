@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -31,6 +32,9 @@ import Data.Vec.Lazy (Vec)
 -- TC "List" (* -> *)
 type TypeVariable = Char
 
+newtype UniVariable = UV Char
+  deriving (Show, Eq, Ord)
+
 newtype InstVariable = IV Char
   deriving (Show, Eq, Ord)
 
@@ -44,6 +48,7 @@ data Type where
   TyCstrS :: String -> [Type] -> Type -- PARSING PURPOSES ONLY
   -- TyCstr :: TypeConstructor -> Vec k Type -> Type
   VarTy :: TypeVariable -> Type
+  UVarTy :: UniVariable -> Type
   IVarTy :: InstVariable -> Type
   Forall :: [TypeVariable] -> Type -> Type
 
@@ -147,7 +152,7 @@ deriving instance Eq (TypeConstructor k)
 
 -- NOTE: can defer this to type checking
 data DataConstructor = DC {getDCName :: String, getType :: Type} -- uppercase
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- type DataConstructor = String
 
@@ -159,7 +164,7 @@ data Pattern
   | VarP Variable
   | IntP Int
   | BoolP Bool
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- primitive binary operators (for now)
 data Bop
@@ -197,7 +202,7 @@ data Expression
   | Lam Variable Expression
   | App Expression [Expression] -- ((s e1) e2) e3
   | Let Variable Expression Expression
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- var wrapper
 var :: Variable -> Expression

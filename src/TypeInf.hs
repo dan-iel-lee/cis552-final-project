@@ -79,11 +79,10 @@ data Constraint = Equal Type Type
   deriving (Show, Eq)
 
 -- | Generates an equality constraint
--- equate :: Type -> Type -> TcMonad ()
-equate :: MonadWriter [Constraint] m => Type -> Type -> m ()
+equate :: Type -> Type -> TcMonad ()
 equate t1 t2
   | t1 == t2 = return ()
-  | otherwise = tell [Equal t1 t2]
+  | otherwise = tell $ TR [Equal t1 t2] mempty
 
 {-
 ==================================================================
@@ -105,11 +104,21 @@ subsequently.
 -- | State we wanna keep while type checking:
 -- Fresh type and inst variables, and the current typing environment
 data TcState = TS UniVariable InstVariable
+  deriving (Show, Eq)
+
+data TcRes = TR [Constraint] (Map UniVariable (Set TypeVariable))
+  deriving (Show, Eq)
+
+instance Monoid TcRes where
+  mempty = TR [] mempty
+
+instance Semigroup TcRes where
+  (TR cs1 m1) <> (TR cs2 m2) = TR (cs1 <> cs2) (Map.unionWith (<>) m1 m2)
 
 type TcMonad' =
   WriterT
     -- gathered constraints
-    [Constraint]
+    TcRes
     ( StateT
         -- generator for new type variables
         -- TypeVariable
@@ -435,14 +444,31 @@ inferType _ _ = error "Unimplemented"
 -- constraints
 checkType :: TypeEnv -> Expression -> Type -> TcMonad ()
 -- GEN
-checkType (TE es as) e (Forall vs t) = do
-  -- checktype
-  checkType newEnv e t
+checkType (TE es as) e (Forall vs t) =
+  let checked = checkType newEnv e t
+   in do
+        -- ensure that
+        -- // TODO: and ensure constraints don't escape their scope
+        -- checktype
+        ((), TR constraints bs) <- listen checked
+        -- find unification variables of c
+        let fuvC = fuvConstraints constraints
+            fuvTy = fuv t
+            fuvEnv = fuvCtx es
+            alphas = fuvC `Set.difference` (fuvTy `Set.union` fuvEnv)
+        -- throwError (show es)
+        -- throwError $ show fuvC <> " " <> show fuvTy <> " " <> show fuvEnv
+        let -- for each unification variable, add the quantified type variables to bounds
+            newBs = foldr (\a acc -> Map.insert a (Set.fromList vs) acc) mempty alphas
+        tell (TR constraints (bs <> newBs))
   where
-    -- ensure that
-    -- // TODO: and ensure constraints don't escape their scope
-
     newEnv = TE es (as <> Set.fromList vs)
+
+    fuvConstraints :: [Constraint] -> Set UniVariable
+    fuvConstraints = foldr (\(Equal t1 t2) acc -> acc `Set.union` fuv t1 `Set.union` fuv t2) mempty
+
+    fuvCtx :: Map Variable Type -> Set UniVariable
+    fuvCtx = foldr (\x acc -> acc `Set.union` fuv x) mempty
 -- LAMBDA CASES
 checkType (TE es as) (Lam x e) (FunTy s1 s2) = checkType newEnv e s2
   where
@@ -772,18 +798,48 @@ mgu (Forall xs ty1) (Forall ys ty2)
 mgu ty1 ty2 = throwError $ "types don't unify " <> show ty1 <> " " <> show ty2
 
 -- | Calls inferTy to generate a type and the constraints
-genConstraints :: TypeEnv -> Expression -> Either String (Type, [Constraint])
+genConstraints :: TypeEnv -> Expression -> Either String (Type, TcRes)
 genConstraints env = runTc . inferType env
 
 -- | Solve a list of constraints. Used after inferType
-solve :: [Constraint] -> Either String (Substitution UniVariable)
-solve =
-  foldM
-    ( \s1 (Equal t1 t2) -> do
-        s2 <- mgu (subst s1 t1) (subst s1 t2)
-        return (s2 `after` s1)
-    )
-    emptySubst
+solve :: TcRes -> Either String (Substitution UniVariable)
+solve tr@(TR cs bs) = do
+  sub <-
+    foldM
+      ( \s1 (Equal t1 t2) -> do
+          s2 <- mgu (subst s1 t1) (subst s1 t2)
+          return (s2 `after` s1)
+      )
+      emptySubst
+      cs
+  if isSubstValid sub bs
+    then return sub
+    else throwError $ "constraint solving failed " <> show tr
+
+-- | AND monoid instance for Bool, used by `isTypeValid`
+instance Monoid Bool where
+  mempty = True
+
+instance Semigroup Bool where -- AND
+  (<>) = (&&)
+
+-- | Checks to make sure unification variables are being unified
+-- to allowed type variables
+isSubstValid :: Substitution UniVariable -> Map UniVariable (Set TypeVariable) -> Bool
+isSubstValid s b = all (\(uv, ty) -> isTypeValid (getSet uv) ty) (Map.toAscList s)
+  where
+    getSet :: UniVariable -> Set TypeVariable
+    getSet uv = fromMaybe mempty (b Map.!? uv)
+
+-- | Auxilliary to `isSubstValid` which checks validity for a given type
+isTypeValid :: Set TypeVariable -> Type -> Bool
+isTypeValid s = foldTy valFolder
+  where
+    valFolder (VarTy a) = Just $ a `Set.member` s
+    valFolder (Forall vs ty) =
+      let newS = s `Set.union` Set.fromList vs
+       in Just $ isTypeValid newS ty
+    valFolder _ = Nothing
 
 -- | Really puts everything together. Goes from an environment
 -- and expression to either a type of an error.
@@ -791,6 +847,7 @@ typeInference :: TypeEnv -> Expression -> Either String Type
 typeInference env e = do
   (ty, constraints) <- genConstraints env e
   -- throwError $ display ty <> " CSTRS: " <> show constraints
+  -- throwError $ show constraints
   s <- solve constraints
   return (subst s ty)
 
@@ -967,7 +1024,7 @@ exCase2 = Case ex2 [(P consDC [VarP "x", VarP "xs"], Var "x"), (P nilDC [], Lam 
 exCase2' :: Expression
 exCase2' = App exCase1 [IntExp 1]
 
-runTc :: TcMonad a -> Either String (a, [Constraint])
+runTc :: TcMonad a -> Either String (a, TcRes)
 runTc m = evalStateT (runWriterT m) (TS (UV 'A') (IV 'K'))
 
 -- MISCELLANEOUS
@@ -993,12 +1050,12 @@ ex =
 expr2 :: [Constraint]
 expr2 =
   [ Equal
-      (Forall "ab" (FunTy (VarTy 'a') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r'))))))
-      (VarTy 'a'),
-    Equal (Forall "ab" (FunTy (VarTy 'b') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r')))))) (VarTy 'b'),
-    Equal (Forall "abq" (FunTy (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))) (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))))) (VarTy 'c'),
-    Equal (VarTy 'r') BoolTy,
-    Equal BoolTy (VarTy 'r'),
-    Equal (Forall "r" (FunTy (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r'))) (VarTy 'r'))) (VarTy 'd'),
-    Equal (Forall "r" (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r')))) (VarTy 'e')
+      ( Forall
+          "a"
+          ( FunTy
+              (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))
+              (TyCstr (TC "Maybe" (SS SZ)) (VarTy 'a' ::: VNil))
+          )
+      )
+      (UVarTy (UV 'A'))
   ]

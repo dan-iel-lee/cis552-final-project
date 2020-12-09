@@ -5,6 +5,7 @@ module Eval where
 import Control.Monad.Except
 import Control.Monad.Fix
 import Data.Map as Map
+import Data.Vec.Lazy (Vec (VNil))
 import Parser
 import Test.HUnit
 import Test.QuickCheck
@@ -274,6 +275,14 @@ prop_stepExec e =
 
 quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
 quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
+
+topeval :: FilePath -> IO ()
+topeval fs = do
+  exp <- parseFile fs
+  let res = eval exp Map.empty
+  print res
+
+ex1 = (Let "pred" (Annot (Lam "n" (Case (Var "n") [(P (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil}) [], C (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil})), (P (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)}) [VarP "m"], Var "m")])) (FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil))) (App (Var "pred") [App (C (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)})) [App (C (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)})) [C (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil})]]]))
 
 {-
 ==========================================================

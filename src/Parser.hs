@@ -466,10 +466,10 @@ constructifyA _ ty = return ty
 parseFile :: String -> IO Expression
 parseFile path = do
   s <- readFile path
-  print s
+  -- --print s
   let p = P.doParse bigParser s
   case p of
-    Just (exp, _) -> print exp >> return exp
+    Just (exp, _) -> return exp
     _ -> empty
 
 parseStr :: String -> IO ()

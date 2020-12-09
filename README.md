@@ -18,7 +18,10 @@
 - [x] Constraints scoping
   - free unification variables
   - extra construct on Constraints
+- [ ] get exList working
 - [ ] type application
+- [ ] make sure UVs are generalized at the end
+- [ ] fix mgu under Foralls
 - [ ] Check the `instantiateCase` is working correctly
 - [ ] make sure order of `after` is correct in all places
 - [ ] existentials?

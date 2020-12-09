@@ -21,11 +21,6 @@ type Environment = Map Variable Value
 
 type StepResult = Either String (Either (Environment, Expression) Value)
 
--- data StepResult =
---   Err String
---   | Step Environment, Expression
---   | Val Value
-
 data Value
   = IntVal Int
   | BoolVal Bool
@@ -47,6 +42,10 @@ instance Show Value where
   show (BoolVal b) = show b
   show (UserDT dt l) = getDCName dt ++ " " ++ Prelude.foldr (\x acc -> show x ++ " " ++ acc) [] l
   show (FunVal _) = "<function>" -- can't show functions
+
+-- empty map
+emptyEnv :: Environment
+emptyEnv = Map.empty
 
 vLookup :: Variable -> Map Variable Value -> StepResult
 vLookup x env =
@@ -74,16 +73,11 @@ evalB Lt (IntVal i1) (IntVal i2) = retStep $ BoolExp (i1 < i2)
 evalB Le (IntVal i1) (IntVal i2) = retStep $ BoolExp (i1 <= i2)
 evalB _ _ _ = const . throwError $ "Invalid argument to binary operator"
 
--- isValue :: Expression -> Bool
--- isValue (IntExp _) = True
--- isValue (BoolExp _) = True
--- isValue (Lam _ _) = True
--- isValue (TyCstr _ _) = True
--- isValue (App )
-
---
+-- add val to environment helper
 
 evalBounded :: Expression -> Environment -> StepResult
+-- simple cases + operators
+
 evalBounded (Var x) s = vLookup x s
 evalBounded (IntExp i) _ = retVal $ IntVal i
 evalBounded (BoolExp i) _ = retVal $ BoolVal i
@@ -94,22 +88,37 @@ evalBounded (Op o e1 e2) s = do
     (Left (s', e1'), _) -> retStep (Op o e1' e2) s' -- step evaluator
     (Right _, Left (s', e2')) -> retStep (Op o e1 e2') s'
     (Right v1, Right v2) -> evalB o v1 v2 s
+-- lamdba function: new version just returns same thing
+
 evalBounded (Lam x e) s = retVal $ FunVal (\v -> return $ Left (Map.insert x v s, e))
-evalBounded (App lam []) s = return $ Left (s, lam)
--- //TODO: User Defined Datatypes
+-- Function Application:
+-- no arguments
+evalBounded (App lam []) s = retStep lam s
+-- Applied to data constructor
+evalBounded (App (C dt) (x : xs)) s = do
+  t1 <- evalBounded x s
+  case t1 of
+    Left (s', x') -> retStep (App (C dt) (x' : xs)) s'
+    Right _ -> retStep (App (PC dt [x]) xs) s
+-- Applied to already partially applied data constructor
+evalBounded (App (PC dt l) (x : xs)) s = do
+  t1 <- evalBounded x s
+  case t1 of
+    Left (s', x') -> retStep (App (PC dt l) (x' : xs)) s'
+    Right _ -> retStep (App (PC dt (l ++ [x])) xs) s
+-- Applied to normal functions/everything else
 evalBounded (App lam (x : xs)) s = do
   t1 <- evalBounded lam s
   t2 <- evalBounded x s
   case (t1, t2) of
+    (Left (s', lam'), _) -> retStep (App lam' (x : xs)) s'
     (_, Left (s', x')) -> retStep (App lam (x' : xs)) s'
-    (Right (UserDT d l), Right v) -> retVal $ UserDT d (l ++ [v])
-    -- retStep (App (UserDT d (l ++ [v]))) xs
     (Right (FunVal g), Right v) -> case g v of
       Left _ -> g v -- threw an error
       Right (Left (s', lam')) -> return $ Left (s', App lam' xs) -- apply function one round
       _ -> throwError "app requires a function/data constructor"
-    _ -> throwError "app requires a function/data constructor"
--- //TODO Yikes, doesn't allow for recursive functions
+    _ -> throwError "app requires a function"
+-- Let Statements
 evalBounded (Let x e1 e2) s = mdo
   t <- evalBounded e1 s
   case t of
@@ -119,6 +128,17 @@ evalBounded (Let x e1 e2) s = mdo
       return $ Left (s', e2)
 evalBounded (Annot e _) s = retStep e s
 evalBounded (C dt) _ = retVal $ UserDT dt []
+-- Evaluated user defined type evaluated to some arguments
+evalBounded (PC dt l) s = retVal $ UserDT dt l'
+  where
+    l' =
+      Prelude.foldr
+        ( \x acc -> case evalBounded x s of
+            Right (Right v) -> v : acc
+            _ -> acc
+        )
+        []
+        l
 -- case
 evalBounded (Case e1 ps) s = do
   t1 <- evalBounded e1 s
@@ -126,7 +146,6 @@ evalBounded (Case e1 ps) s = do
     Left (s', e1') -> retStep (Case e1' ps) s'
     Right v -> findCase v ps s
 
--- // TODO Handle user defined data types in casing
 patternMatch :: Value -> Pattern -> Environment -> (Bool, Environment)
 patternMatch (IntVal i) (IntP p) s = (i == p, s)
 patternMatch (BoolVal b) (BoolP p) s = (b == p, s)
@@ -237,9 +256,9 @@ testCasingSimple =
 testUserDefined =
   TestList
     [ "let x = P in x"
-        ~: eval (Let "x" (C (DC "P" IntTy)) (Var "x")) Map.empty ~?= Right (UserDT (DC "P" IntTy) [])
-        -- "let x = P 3 4 in x"
-        --   ~: eval (Let "x" (App (C (DC "P" IntTy)) [IntExp 3, IntExp 4]) (Var "x")) Map.empty ~?= Right (UserDT (DC "P" IntTy) [IntVal 3])
+        ~: eval (Let "x" (C (DC "P" IntTy)) (Var "x")) Map.empty ~?= Right (UserDT (DC "P" IntTy) []),
+      "let x = P 3 4 in x"
+        ~: eval (Let "x" (App (C (DC "P" IntTy)) [IntExp 3, IntExp 4]) (Var "x")) Map.empty ~?= Right (UserDT (DC "P" IntTy) [IntVal 3, IntVal 4])
     ]
 
 -- -- quickcheck property
@@ -255,3 +274,55 @@ prop_stepExec e =
 
 quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
 quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
+
+{-
+==========================================================
+Potential Second Attempt at Eval that isn't gross
+
+==========================================================
+-}
+-- type StepResult1 = Either String Step
+
+-- data Step = Step {getExpr :: Expression, getEnv :: Environment}
+
+-- -- takes a basically eval'd function and tries to eval the operator
+-- evalB' :: Bop -> Expression -> Expression -> Environment -> StepResult1
+-- evalB' Plus (IntExp i1) (IntExp i2) s = return $ Step (IntExp (i1 + i2)) s
+-- evalB' Minus (IntExp i1) (IntExp i2) s = return $ Step (IntExp (i1 - i2)) s
+-- evalB' Times (IntExp i1) (IntExp i2) s = return $ Step (IntExp (i1 * i2)) s
+-- evalB' Gt (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 > i2)) s
+-- evalB' Ge (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 >= i2)) s
+-- evalB' Lt (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 < i2)) s
+-- evalB' Le (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 <= i2)) s
+-- evalB' _ _ _ _ = throwError "Invalid argument to binary operator"
+
+-- convertValToExpr :: Value -> Expression
+-- convertValToExpr = undefined
+
+-- vLookup' :: Variable -> Environment -> StepResult1
+-- vLookup' x env =
+--   case Map.lookup x env of
+--     Just ty -> return $ Step (convertValToExpr ty) env
+--     Nothing -> throwError $ "Unbound variable " ++ x
+
+-- isValue :: Expression -> Bool
+-- isValue (IntExp _) = True
+-- isValue (BoolExp _) = True
+-- isValue (Lam _ _) = True
+-- isValue (C _) = True
+-- isValue (PC _ _) = True
+-- isValue _ = False
+
+-- evalBounded' :: Expression -> Environment -> StepResult1
+-- evalBounded' (Var x) env = vLookup' x env
+-- evalBounded' exp@(IntExp _) env = return $ Step exp env
+-- evalBounded' exp@(BoolExp _) env = return $ Step exp env
+-- evalBounded' (Op o e1 e2) env = do
+--   s <- evalBounded' e1 env
+--   s2 <- evalBounded' e2 env
+--   if isValue (getExpr s) && isValue (getExpr s2)
+--     then evalB' o (getExpr s) (getExpr s2) env
+--     else return $ Step (Op o (getExpr s) (getExpr s2)) env
+-- evalBounded' exp@(Lam _ _) env = return $ Step exp env
+
+-- -- Converting App calls

@@ -21,6 +21,7 @@
 module Types where
 
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Map as Map
 import Data.Nat
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -192,6 +193,7 @@ data Expression
   | -- | user defined data constructors
     Annot Expression Type -- (x :: Int)
   | C DataConstructor
+  | PC DataConstructor [Expression] -- partially constructed udt -- eval only
   | CS String -- PARSING ONLY
   | -- | primitives
     IntExp Int
@@ -212,4 +214,4 @@ var v = App (Var v) []
 
 -- MISCELLANEOUS
 foldableToSet :: (Ord a, Foldable f) => f a -> Set a
-foldableToSet = foldr Set.insert Set.empty
+foldableToSet = Prelude.foldr Set.insert Set.empty

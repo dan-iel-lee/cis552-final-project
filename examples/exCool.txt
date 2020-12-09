@@ -5,14 +5,13 @@ injr :: forall a b . b -> (forall r . (a -> r) -> (b -> r) -> r)
 injr = \y -> \f -> \g -> g y ;
 
 
-casee :: forall a b . (forall r . (a -> r) -> (b -> r) -> r) -> (a -> r) -> (b -> r) -> r
+casee :: forall a b q . ((a -> q) -> (b -> q) -> q) -> (a -> q) -> (b -> q) -> q
 casee = \s -> \f -> \g -> s f g ;
 
+isTrue :: ((Int -> Bool) -> (Bool -> Bool) -> Bool) -> Bool
+isTrue = \s -> casee s (\x -> x >= 1) (\b -> b) ;
 
 exL :: forall r . (Int -> r) -> (Bool -> r) -> r
 exL = injl 1 ;
-
-isTrue :: (forall r . (Int -> r) -> (Bool -> r) -> r) -> r
-isTrue = \s -> casee s (\x -> x >= 1) (\b -> b) ;
 
 isTrue exL

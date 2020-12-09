@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -20,6 +21,7 @@
 module Types where
 
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Map as Map
 import Data.Nat
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -30,6 +32,9 @@ import Data.Vec.Lazy (Vec)
 -- ==============================
 -- TC "List" (* -> *)
 type TypeVariable = Char
+
+newtype UniVariable = UV Char
+  deriving (Show, Eq, Ord)
 
 newtype InstVariable = IV Char
   deriving (Show, Eq, Ord)
@@ -44,6 +49,7 @@ data Type where
   TyCstrS :: String -> [Type] -> Type -- PARSING PURPOSES ONLY
   -- TyCstr :: TypeConstructor -> Vec k Type -> Type
   VarTy :: TypeVariable -> Type
+  UVarTy :: UniVariable -> Type
   IVarTy :: InstVariable -> Type
   Forall :: [TypeVariable] -> Type -> Type
 
@@ -147,7 +153,7 @@ deriving instance Eq (TypeConstructor k)
 
 -- NOTE: can defer this to type checking
 data DataConstructor = DC {getDCName :: String, getType :: Type} -- uppercase
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- type DataConstructor = String
 
@@ -159,7 +165,7 @@ data Pattern
   | VarP Variable
   | IntP Int
   | BoolP Bool
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- primitive binary operators (for now)
 data Bop
@@ -187,6 +193,7 @@ data Expression
   | -- | user defined data constructors
     Annot Expression Type -- (x :: Int)
   | C DataConstructor
+  | PC DataConstructor [Expression] -- partially constructed udt -- eval only
   | CS String -- PARSING ONLY
   | -- | primitives
     IntExp Int
@@ -197,7 +204,7 @@ data Expression
   | Lam Variable Expression
   | App Expression [Expression] -- ((s e1) e2) e3
   | Let Variable Expression Expression
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- var wrapper
 var :: Variable -> Expression
@@ -207,4 +214,4 @@ var v = App (Var v) []
 
 -- MISCELLANEOUS
 foldableToSet :: (Ord a, Foldable f) => f a -> Set a
-foldableToSet = foldr Set.insert Set.empty
+foldableToSet = Prelude.foldr Set.insert Set.empty

@@ -1,0 +1,4 @@
+bad :: forall b . b -> b
+bad = \x -> x ;
+
+bad

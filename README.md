@@ -1,4 +1,8 @@
 # project-cis552
+# coming to a haskell near you...
+
+## Demo ideas
+- Propositions as types
 
 
 ## TODO type checking
@@ -9,7 +13,18 @@
 - figure out scoping for type variables in constraints
 - how does mgu work when you go under a forall binder?
   -  
-- [ ] combine InstMonad with TcMonad
+- [x] combine InstMonad with TcMonad
+- [x] Scoping in mgu using context
+- [x] Constraints scoping
+  - free unification variables
+  - extra construct on Constraints
+- [ ] type application
+- [ ] Check the `instantiateCase` is working correctly
+- [ ] make sure order of `after` is correct in all places
+- [ ] existentials?
+
+## Properties for type checking
+- unification variables never escape their bounds/scope
 
 ## Why abandon GADT solution?
 I'm starting to realize that enforcing stratification at the implementation level is more of a headache

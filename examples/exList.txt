@@ -1,0 +1,8 @@
+data List a = Nil | Cons a (List a)
+
+flipBool :: Bool -> Bool 
+flipBool = \b -> case b 
+  | True -> False 
+  | False -> True ;
+
+flipBool True

@@ -1,0 +1,4 @@
+x :: Int -> Int
+x = \y -> if y >= 0 then 3 else 4; 
+
+x 3

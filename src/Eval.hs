@@ -140,6 +140,14 @@ evalBounded (PC dt l) s = retVal $ UserDT dt l'
         )
         []
         l
+
+-- if statements
+evalBounded (If cond e2 e3) s = do
+  t <- evalBounded cond s
+  case t of
+    Left (s'', cond') -> retStep (If cond' e2 e3) s''
+    Right (BoolVal b) -> if b then retStep e2 s else retStep e3 s
+    _ -> throwError "cannot evaluate non-bool in if statement"
 -- case
 evalBounded (Case e1 ps) s = do
   t1 <- evalBounded e1 s
@@ -187,21 +195,6 @@ eval e s = do
   case step of
     Left (s', e') -> eval e' s'
     Right v -> return v
-
--- -- repl
-
--- test cases:
-
--- replE :: IO ()
--- replE = do
---   putStr "%> "
---   line <- getLine
---   case Parser.parse line of
---     Just exp ->
---       case eval exp Map.empty of
---         Left str -> putStrLn str >> replE
---         Right val -> putStrLn (show val) >> replE
---     Nothing -> putStrLn "what?!?" >> replE
 
 -- -- TEST CASES
 isFailing :: Either a b -> Test
@@ -276,13 +269,26 @@ prop_stepExec e =
 quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
 quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
 
-topeval :: FilePath -> IO ()
-topeval fs = do
+topEval :: FilePath -> IO ()
+topEval fs = do
   exp <- parseFile fs
+  print exp
   let res = eval exp Map.empty
   print res
 
-ex1 = (Let "pred" (Annot (Lam "n" (Case (Var "n") [(P (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil}) [], C (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil})), (P (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)}) [VarP "m"], Var "m")])) (FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil))) (App (Var "pred") [App (C (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)})) [App (C (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)})) [C (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil})]]]))
+-- -- repl
+
+-- test cases:
+
+replE :: IO ()
+replE = do
+  putStr "%> "
+  line <- getLine
+  expr <- parseString line
+  print expr >> replE
+  case eval expr Map.empty of
+    Left str -> putStrLn str >> replE
+    Right val -> print val >> replE
 
 {-
 ==========================================================

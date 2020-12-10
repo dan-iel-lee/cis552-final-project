@@ -1,0 +1,18 @@
+data List a = Nil | Cons a (List a)
+
+contains :: forall a . (a -> Bool) -> (List a) -> Bool
+contains = \p -> \l -> case l
+  | Nil -> False
+  | Cons x xs -> (if (p x) then True else contains p xs) ;
+  
+or :: Bool -> Bool -> Bool 
+or = \b -> \c -> if b then (if c then False else True) else True ;
+
+
+exL :: List Int
+exL = Cons 1 (Cons 2 (Cons 3 Nil)) ;
+
+g :: Int -> Bool
+g = \x -> x >= 2 ;
+
+contains g exL

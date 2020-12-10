@@ -1,3 +1,5 @@
+
+
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -25,7 +27,7 @@ import qualified Data.Vec.Lazy as Vec
 import qualified ParserCombinators as P
 import Test.HUnit
 import Test.QuickCheck hiding (Fun)
-import Text.PrettyPrint (Doc, ($$), (<+>), (<>))
+import Text.PrettyPrint (Doc, ($$), (<+>))
 import qualified Text.PrettyPrint as PP
 import Types
 
@@ -44,11 +46,19 @@ type PMonad a = StateT ([DataConstructor], [HTypeConstructor]) P.Parser a
 -- HELPERS
 -- =====================
 
-keywords = Set.fromList ["if", "then", "else", "case", "of", "data", "let", "in"]
+keywords = Set.fromList ["if", "then", "else", "case", "of", "let", "data"]
 
 -- parse something then consume all following whitespace
 wsP :: P.Parser a -> P.Parser a
 wsP p = p <* many (P.satisfy Char.isSpace)
+
+isNotNewline :: Char -> Bool
+isNotNewline c = c /= '\n'
+
+commentsP :: P.Parser a -> P.Parser a
+commentsP p = many commentP *> p <* many commentP
+  where
+    commentP = wsP $ (++) <$> kwP "--" <*> many (P.satisfy isNotNewline)
 
 wsPStrict :: P.Parser a -> P.Parser a
 wsPStrict p = p <* some (P.satisfy Char.isSpace)
@@ -101,7 +111,7 @@ typeauxP s = wsP $ intTyP <|> boolTyP <|> varTyP <|> forallP s <|> tyCstrP s <|>
     forallP s = do
       vars <- wsP $ kwP "forall" *> tyVarsP <* P.char '.'
       let newS = s `Set.union` Set.fromList vars
-      Forall vars <$> (typeP newS)
+      Forall vars <$> typeP newS
 
     tyCstrP :: Set TypeVariable -> P.Parser Type
     tyCstrP s = do
@@ -110,22 +120,20 @@ typeauxP s = wsP $ intTyP <|> boolTyP <|> varTyP <|> forallP s <|> tyCstrP s <|>
       return (TyCstrS name tys)
 
 tyVarsP :: P.Parser [TypeVariable]
-tyVarsP = many (wsPStrict (P.satisfy Char.isLower))
-
--- tyCstrP :: Set
+tyVarsP = (++) <$> many (wsPStrict (P.satisfy Char.isLower)) <*> many (wsP (P.satisfy Char.isLower))
 
 -- parse a "->" operator
 funP :: P.Parser (Type -> Type -> Type)
 funP = wsP $ P.string "->" $> FunTy
 
 typeP :: Set TypeVariable -> P.Parser Type
-typeP s = (typeauxP s `P.chainr1` funP) <|> parenP (typeP s)
+typeP s = typeauxP s `P.chainr1` funP
 
 -- variables should be lower case
 varP :: P.Parser Variable
 varP =
   let potentialVar = wsP ((:) <$> P.satisfy Char.isLower <*> many (P.satisfy Char.isAlpha))
-   in P.filter (`Set.notMember` keywords) potentialVar
+   in P.filter (\v -> Set.notMember v keywords) potentialVar
 
 boolP :: P.Parser Bool
 boolP =
@@ -193,11 +201,6 @@ constP = do
   dcs <- dcsP tcStuff
   return (HTC tc, dcs)
 
-{-
-data List a = Nil | exists b. Cons b (List a)
-
-Cons : forall a. b -> List a -> List a
- -}
 constructorsP :: P.Parser ([HTypeConstructor], [DataConstructor])
 constructorsP = do
   dcss <- many constP
@@ -229,22 +232,22 @@ intExprP = IntExp <$> wsP intP
 ifP :: P.Parser Expression
 ifP =
   If
-    <$> (kwP "if" *> exprP)
-    <*> (kwP "then" *> exprP)
-    <*> (kwP "else" *> exprP)
+    <$> (kwP "if" *> (unAnnotExprP <|> exprP))
+    <*> (kwP "then" *> (unAnnotExprP <|> exprP))
+    <*> (kwP "else" *> (unAnnotExprP <|> exprP))
 
 lamP :: P.Parser Expression
 lamP =
   Lam
     <$> (kwP "\\" *> varP)
-    <*> (kwP "->" *> exprP)
+    <*> (kwP "->" *> (unAnnotExprP <|> exprP))
 
 letrecP :: P.Parser Expression
 letrecP =
   Let
     <$> (kwP "let" *> varP)
-    <*> (kwP "=" *> exprP)
-    <*> (kwP "in" *> exprP)
+    <*> (kwP "=" *> (unAnnotExprP <|> exprP))
+    <*> (kwP "in" *> (unAnnotExprP <|> exprP))
 
 appP :: P.Parser Expression
 appP = do
@@ -266,7 +269,7 @@ dataP :: P.Parser Pattern
 dataP = PS <$> wsP upperCaseString <*> many patternP
 
 patternP :: P.Parser Pattern
-patternP = dataP <|> varPP <|> intPP <|> boolPP
+patternP = intPP <|> boolPP <|> dataP <|> varPP
 
 caseP :: P.Parser Expression
 caseP =
@@ -274,15 +277,13 @@ caseP =
     <$> (kwP "case" *> wsP exprP)
     <*> some ((,) <$> (wsP (P.char '|') *> wsP patternP) <*> (kwP "->" *> wsP exprP))
 
--- <* wsP (P.char ';') -- // TODO: any alternative?
-
 dcEP :: P.Parser Expression
 dcEP = CS <$> upperCaseString
 
 exCase =
   "case n \
   \ | Z -> Z \
-  \ | S m -> m ;"
+  \ | S m -> m"
 
 addOp :: P.Parser Bop
 addOp =
@@ -299,19 +300,36 @@ cmpOp =
     <|> kwP "<" *> pure Lt
     <|> kwP ">" *> pure Gt
 
+annotExprP :: P.Parser Expression
+annotExprP = do
+  expr <- unAnnotExprP <|> exprP
+  types <- kwP "::" *> typeP (Set.empty :: Set.Set TypeVariable)
+  return $ Annot expr types
+
+unAnnotExprP :: P.Parser Expression
+unAnnotExprP = wsP appPP
+  where
+    appPP = (App <$> wsP sumP <*> some (sumP <|> parenP unAnnotExprP)) <|> sumP
+    sumP = prodP `P.chainl1` (Op <$> addOp)
+    prodP = compP `P.chainl1` (Op <$> mulOp)
+    compP = factorP `P.chainl1` (Op <$> cmpOp)
+    factorP = wsP (parenP annotExprP) <|> baseP
+    baseP =
+      boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP
+        <|> caseP
+        <|> dcEP
+        <|> varExprP
+
 exprP :: P.Parser Expression
 exprP = wsP appPP
   where
-    -- exprP = sumP
-
-    appPP = (App <$> wsP sumP <*> some (sumP <|> parenP exprP)) <|> sumP
+    appPP = annotExprP <|> (App <$> wsP sumP <*> some (sumP <|> parenP exprP)) <|> sumP
     sumP = prodP `P.chainl1` (Op <$> addOp)
     prodP = compP `P.chainl1` (Op <$> mulOp)
     compP = factorP `P.chainl1` (Op <$> cmpOp)
     factorP = wsP (parenP exprP) <|> baseP
     baseP =
-      {-appP <|> -} boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP
-        <|> caseP
+      boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP <|> caseP
         <|> dcEP
         <|> varExprP
 
@@ -321,28 +339,35 @@ exprP = wsP appPP
 
 data Declaration = Dec Variable Expression deriving (Show)
 
-tempAnnotParser :: P.Parser (Variable, Type)
-tempAnnotParser = P.P $ \s -> do
-  (varName, s') <- P.doParse varP s
-  (_, s'') <- P.doParse (kwP "::") s'
-  (types, s''') <- P.doParse (typeP (Set.empty :: Set.Set TypeVariable)) s''
-  return ((varName, types), s''')
+decUnannotParser :: P.Parser Declaration
+decUnannotParser = do
+  vname <- varP <* kwP "="
+  expr <- exprP
+  wsP (P.char ';')
+  return (Dec vname expr)
 
-decParser :: P.Parser Declaration
-decParser = do
-  -- // TODO: make this alternative to not require annotations
-  (vname, types) <- tempAnnotParser
+decAnnotParser :: P.Parser Declaration
+decAnnotParser = do
+  let dAnnotParser = do
+        varN <- varP
+        kwP "::"
+        types <- typeP (Set.empty :: Set.Set TypeVariable)
+        return (varN, types)
+  (vname, types) <- dAnnotParser
   vname' <- varP <* kwP "="
   guard $ vname == vname'
   expr <- exprP
   wsP (P.char ';')
   return (Dec vname (Annot expr types))
 
+decParser :: P.Parser Declaration
+decParser = decAnnotParser <|> decUnannotParser
+
 exDec =
-  "pred :: Nat -> Nat \
-  \ pred = \\n -> case n\
-  \ | Z -> Z \
-  \ | S m -> m ;"
+  "a =\
+  \ case b \n\
+  \ | True -> False\
+  \ | False -> True ;"
 
 -- ==============
 -- Putting stuff together
@@ -470,7 +495,7 @@ constructifyA _ ty = return ty
 parseFile :: String -> IO Expression
 parseFile path = do
   s <- readFile path
-  -- --print s
+  print s
   let p = P.doParse bigParser s
   case p of
     Just (exp, _) -> return exp
@@ -551,7 +576,7 @@ instance PP Expression where
         PP.text "in",
         PP.nest 2 (pp e2)
       ]
-  pp _ = undefined
+  pp w = error $ show w <> " should not be here!"
 
 instance PP (TypeConstructor k) where
   pp (TC name _) = PP.text name
@@ -559,13 +584,28 @@ instance PP (TypeConstructor k) where
 instance PP Type where
   pp IntTy = PP.text "Int"
   pp BoolTy = PP.text "Bool"
-  pp (FunTy ty1 ty2) = pp ty1 <+> PP.text "->" <+> pp ty2
+  pp f@(FunTy _ _) = ppPrecType 0 f
   pp (TyCstr tc vec) = pp tc <+> PP.hcat (map pp (Vec.toList vec))
   pp (VarTy x) = PP.char x
   pp (IVarTy (IV x)) = PP.text "IV" <+> PP.char x
   pp (UVarTy (UV x)) = PP.char x
-  pp (Forall vs ty) = PP.text "forall" <+> PP.hcat (map PP.char vs) <+> pp ty
-  pp _ = undefined
+  pp f@(Forall _ _) = ppPrecType 0 f
+  pp w = error $ show w <> " should not be here!"
+
+ppPrecType :: Int -> Type -> Doc
+ppPrecType n t@(Forall vs ty) =
+  parens (levelForall < n) $
+    PP.text "forall" <+> foldr ((<+>) . PP.char) (PP.text "") vs <+> PP.text "." <+> ppPrecType (levelForall + 1) ty
+ppPrecType n t@(FunTy ty1 ty2) = case (ty1, ty2) of
+  (FunTy _ _, _) -> PP.parens (pp ty1) <+> PP.text "->" <+> ppPrecType (levelFunTy + 1) ty2
+  (_, _) -> ppPrecType (levelFunTy + 1) ty1 <+> PP.text "->" <+> ppPrecType (levelFunTy + 1) ty2
+ppPrecType _ v@(VarTy _) = pp v
+ppPrecType _ IntTy = PP.text "Int"
+ppPrecType _ BoolTy = PP.text "Bool"
+ppPrecType n t@(TyCstr _ _) = pp t
+ppPrecType n (IVarTy (IV x)) = PP.char x
+ppPrecType n (UVarTy (UV x)) = PP.char x
+ppPrecType _ w = error $ show w <> " should not be here!"
 
 ppPrec :: Int -> Expression -> Doc
 ppPrec n (Op bop e1 e2) =
@@ -597,6 +637,10 @@ levelCase = 2
 levelLet = 1
 
 levelFun = 1 -- (= almost always needs parens)
+
+levelForall = 1
+
+levelFunTy = 1
 
 indented :: PP a => a -> String
 indented = PP.render . pp

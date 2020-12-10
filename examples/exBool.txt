@@ -1,0 +1,4 @@
+flipBool :: Bool -> Bool 
+flipBool = \b -> if b then False else True ;
+
+flipBool True

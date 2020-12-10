@@ -7,4 +7,4 @@ id = \x -> x ;
 auto :: (forall a . a -> a) -> (forall a . a -> a)
 auto = id id ;
 
-compose auto  
+compose auto auto

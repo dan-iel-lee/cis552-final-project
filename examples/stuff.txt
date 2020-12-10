@@ -16,3 +16,6 @@ and :: Bool -> Bool -> Bool
 and = \x -> \y ->
   case x of
     | True ->
+    
+injr :: forall a b . b -> (forall r . (a -> r) -> (b -> r) -> r)
+injr = \y -> \f -> \g -> g y ;

@@ -3,6 +3,7 @@
 
 ## Demo ideas
 - Propositions as types
+- print constraints
 
 
 ## TODO type checking
@@ -21,9 +22,14 @@
 - [ ] get exList working
 - [ ] type application
 - [ ] make sure UVs are generalized at the end
-- [ ] fix mgu under Foralls
+- [ ] fix mgu under Foralls !!!!
+  - Maybe by instantiating them and generating more constraints
 - [ ] Check the `instantiateCase` is working correctly
 - [ ] make sure order of `after` is correct in all places
+- [ ] Look at paper for what strata are included in Constraints
+
+
+
 - [ ] existentials?
 
 ## Properties for type checking

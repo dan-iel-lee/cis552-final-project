@@ -1,2 +1,2 @@
-let f = \x -> x + 1 in
-  f True
+let f = \x -> x + 1
+ in f 3

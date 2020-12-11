@@ -17,6 +17,7 @@ import Test.QuickCheck
     (==>),
   )
 import Types
+import qualified TypeInf as TI
 
 type Environment = Map Variable Value
 
@@ -116,7 +117,7 @@ evalBounded (App lam (x : xs)) s = do
     (_, Left (s', x')) -> retStep (App lam (x' : xs)) s'
     (Right (FunVal g), Right v) -> case g v of
       Left _ -> g v -- threw an error
-      Right (Left (s', lam')) -> return $ Left (s', App lam' xs) -- apply function one round
+      Right (Left (s', lam')) -> retStep (App lam' xs) (Map.union s s')   -- apply function one round
       _ -> throwError "app requires a function/data constructor"
     _ -> throwError "app requires a function"
 -- Let Statements
@@ -187,6 +188,14 @@ eval e s = do
   case step of
     Left (s', e') -> eval e' s'
     Right v -> return v
+
+-- evaluates for a certain number of steps
+evalNum :: Expression -> Environment -> Int -> StepResult
+evalNum e s num = do
+  step <- evalBounded e s
+  case step of
+    Left (s', e') -> if num <= 1 then retStep e' s' else evalNum e' s' (num - 1)
+    Right v -> retVal v
 
 -- -- repl
 
@@ -279,7 +288,9 @@ quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
 topeval :: FilePath -> IO ()
 topeval fs = do
   exp <- parseFile fs
-  let res = eval exp Map.empty
+  let ty = TI.typeInference TI.emptyEnv exp 
+      res = eval exp Map.empty
+  print $ "Type: " <> show (display <$> ty)
   print res
 
 ex1 = (Let "pred" (Annot (Lam "n" (Case (Var "n") [(P (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil}) [], C (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil})), (P (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)}) [VarP "m"], Var "m")])) (FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil))) (App (Var "pred") [App (C (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)})) [App (C (DC {getDCName = "S", getType = FunTy (TyCstr (TC "Nat" SZ) VNil) (TyCstr (TC "Nat" SZ) VNil)})) [C (DC {getDCName = "Z", getType = TyCstr (TC "Nat" SZ) VNil})]]]))

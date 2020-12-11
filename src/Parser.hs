@@ -61,6 +61,13 @@ kwP s = wsP $ P.string s
 isLowerOrSpace :: Char -> Bool
 isLowerOrSpace c = Char.isLower c || Char.isSeparator c
 
+isNotNewline :: Char -> Bool
+isNotNewline c = c /= '\n'
+
+commentsP :: P.Parser a -> P.Parser a
+commentsP p = many commentP *> p <* many commentP where
+  commentP = wsP $ (++) <$> P.string "--" <*> many (P.satisfy isNotNewline)
+
 trim :: String -> String
 trim = List.dropWhileEnd Char.isSeparator
 
@@ -321,22 +328,45 @@ exprP = wsP appPP
 
 data Declaration = Dec Variable Expression deriving (Show)
 
-tempAnnotParser :: P.Parser (Variable, Type)
-tempAnnotParser = P.P $ \s -> do
-  (varName, s') <- P.doParse varP s
-  (_, s'') <- P.doParse (kwP "::") s'
-  (types, s''') <- P.doParse (typeP (Set.empty :: Set.Set TypeVariable)) s''
-  return ((varName, types), s''')
+-- tempAnnotParser :: P.Parser (Variable, Type)
+-- tempAnnotParser = P.P $ \s -> do
+--   (varName, s') <- P.doParse varP s
+--   (_, s'') <- P.doParse (kwP "::") s'
+--   (types, s''') <- P.doParse (typeP (Set.empty :: Set.Set TypeVariable)) s''
+--   return ((varName, types), s''')
 
-decParser :: P.Parser Declaration
-decParser = do
-  -- // TODO: make this alternative to not require annotations
-  (vname, types) <- tempAnnotParser
+-- decParser :: P.Parser Declaration
+-- decParser = do
+--   -- // TODO: make this alternative to not require annotations
+--   (vname, types) <- tempAnnotParser
+--   vname' <- varP <* kwP "="
+--   guard $ vname == vname'
+--   expr <- exprP
+--   wsP (P.char ';')
+--   return (Dec vname (Annot expr types))
+
+decUnannotParser :: P.Parser Declaration
+decUnannotParser = do
+  vname <- varP <* kwP "="
+  expr <- exprP
+  wsP (P.char ';')
+  return (Dec vname expr)
+
+decAnnotParser :: P.Parser Declaration
+decAnnotParser = do
+  let dAnnotParser = do varN <- varP
+                        kwP "::"
+                        types <- typeP (Set.empty :: Set.Set TypeVariable)
+                        return (varN, types)
+  (vname, types) <- dAnnotParser
   vname' <- varP <* kwP "="
   guard $ vname == vname'
   expr <- exprP
   wsP (P.char ';')
   return (Dec vname (Annot expr types))
+
+decParser :: P.Parser Declaration
+decParser = decAnnotParser <|> decUnannotParser
 
 exDec =
   "pred :: Nat -> Nat \
@@ -559,12 +589,14 @@ instance PP (TypeConstructor k) where
 instance PP Type where
   pp IntTy = PP.text "Int"
   pp BoolTy = PP.text "Bool"
-  pp (FunTy ty1 ty2) = pp ty1 <+> PP.text "->" <+> pp ty2
-  pp (TyCstr tc vec) = pp tc <+> PP.hcat (map pp (Vec.toList vec))
+  pp (FunTy ty1 ty2) = case (ty1, ty2) of
+    (FunTy _ _, _) -> PP.parens (pp ty1) <+> PP.text "->" <+> pp ty2
+    (_, _) -> pp ty1 <+> PP.text "->" <+> pp ty2
+  pp (TyCstr tc vec) = pp tc <+> (foldr ((<+>) . pp) (PP.text "") (Vec.toList vec))
   pp (VarTy x) = PP.char x
   pp (IVarTy (IV x)) = PP.text "IV" <+> PP.char x
   pp (UVarTy (UV x)) = PP.char x
-  pp (Forall vs ty) = PP.text "forall" <+> PP.hcat (map PP.char vs) <+> pp ty
+  pp (Forall vs ty) = PP.parens $ PP.text "forall" <+> foldr ((<+>) . PP.char) (PP.text "") vs <+> PP.text "." <+> pp ty
   pp _ = undefined
 
 ppPrec :: Int -> Expression -> Doc

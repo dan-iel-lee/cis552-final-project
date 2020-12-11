@@ -3,7 +3,7 @@
 
 ## Demo ideas
 - Propositions as types
-- print constraints
+- [ ] print constraints
 
 
 ## TODO type checking
@@ -51,6 +51,7 @@ see fit.
   - [x] parse types
   - [x] parse data constructors in expressions
   - [ ] ignore comments
+  - [ ] allow non-annotated
 - Type checking
   - [ ] write test cases with examples
 - Evaluator

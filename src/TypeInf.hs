@@ -874,6 +874,14 @@ typeInference env e = do
   s <- solve constraints
   return (subst s ty)
 
+putCstrts :: FilePath -> IO () 
+putCstrts fp = do
+  e <- parseFile fp
+  case genConstraints emptyEnv e of
+    Right (ty, constraints@(TR cs _)) ->
+      mapM_ (\c -> putStrLn (display c)) cs
+    Left _ -> return ()
+
 top :: FilePath -> IO ()
 top fp = do
   exp <- parseFile fp
@@ -932,7 +940,9 @@ generalize env m = do
       let fuvs = fuv sty `minus` fuvCtx (getExpVars env)
           tvs = map (\(UV v) -> toLower v) (Set.toList fuvs)
           sub = substUniToType fuvs
-      return (Forall tvs (subst sub sty))
+      return $ if tvs == "" 
+        then subst sub sty
+        else Forall tvs (subst sub sty)
 
 minus :: Ord a => Set a -> Set a -> Set a
 minus = Set.foldr Set.delete

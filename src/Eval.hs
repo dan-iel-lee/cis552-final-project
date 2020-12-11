@@ -16,6 +16,7 @@ import Test.QuickCheck
     stdArgs,
     (==>),
   )
+import qualified TypeInf as TI
 import Types
 
 type Environment = Map Variable Value
@@ -117,7 +118,7 @@ evalBounded (App lam (x : xs)) s = do
     (_, Left (s', x')) -> retStep (App lam (x' : xs)) s'
     (Right (FunVal g), Right v) -> case g v of
       Left _ -> g v -- threw an error
-      Right (Left (s', lam')) -> return $ Left (s', App lam' xs) -- apply function one round
+      Right (Left (s', lam')) -> retStep (App lam' xs) (Map.union s s') -- apply function one round
       _ -> throwError "app requires a function/data constructor"
     _ -> throwError "app requires a function"
 -- Let Statements
@@ -196,6 +197,14 @@ eval e s = do
   case step of
     Left (s', e') -> eval e' s'
     Right v -> return v
+
+-- evaluates for a certain number of steps
+evalNum :: Expression -> Environment -> Int -> StepResult
+evalNum e s num = do
+  step <- evalBounded e s
+  case step of
+    Left (s', e') -> if num <= 1 then retStep e' s' else evalNum e' s' (num - 1)
+    Right v -> retVal v
 
 -- -- repl
 

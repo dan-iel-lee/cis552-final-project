@@ -65,8 +65,9 @@ isNotNewline :: Char -> Bool
 isNotNewline c = c /= '\n'
 
 commentsP :: P.Parser a -> P.Parser a
-commentsP p = many commentP *> p <* many commentP where
-  commentP = wsP $ (++) <$> P.string "--" <*> many (P.satisfy isNotNewline)
+commentsP p = many commentP *> p <* many commentP
+  where
+    commentP = wsP $ (++) <$> P.string "--" <*> many (P.satisfy isNotNewline)
 
 trim :: String -> String
 trim = List.dropWhileEnd Char.isSeparator
@@ -354,10 +355,11 @@ decUnannotParser = do
 
 decAnnotParser :: P.Parser Declaration
 decAnnotParser = do
-  let dAnnotParser = do varN <- varP
-                        kwP "::"
-                        types <- typeP (Set.empty :: Set.Set TypeVariable)
-                        return (varN, types)
+  let dAnnotParser = do
+        varN <- varP
+        kwP "::"
+        types <- typeP (Set.empty :: Set.Set TypeVariable)
+        return (varN, types)
   (vname, types) <- dAnnotParser
   vname' <- varP <* kwP "="
   guard $ vname == vname'
@@ -581,7 +583,8 @@ instance PP Expression where
         PP.text "in",
         PP.nest 2 (pp e2)
       ]
-  pp _ = undefined
+  pp (Mu f e) = (PP.text $ "[" ++ f ++ "]") <+> pp e
+  pp e = PP.text $ show e
 
 instance PP (TypeConstructor k) where
   pp (TC name _) = PP.text name

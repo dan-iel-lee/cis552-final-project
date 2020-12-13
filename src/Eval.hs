@@ -56,6 +56,10 @@ data Step = Step {getExpr :: Expression, getEnv :: Environment}
 
 type StepResult = Either String Step
 
+-- data ScopedExpression
+--   = Exp Expression
+--   | Fun Expression Environment
+
 instance Show Step where
   show (Step expr env) = "Expr: " ++ show expr ++ "\n" ++ "Map: " ++ show env
 

@@ -204,6 +204,7 @@ data Expression
   | Lam Variable Expression
   | App Expression [Expression] -- ((s e1) e2) e3
   | Let Variable Expression Expression
+  | Mu Variable Expression
   deriving (Show, Eq)
 
 -- var wrapper

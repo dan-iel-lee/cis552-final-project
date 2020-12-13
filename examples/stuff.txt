@@ -1,21 +1,10 @@
+compose :: forall a b c . (b -> c) -> (a -> b) -> a -> c 
+compose = \f -> \g -> \x -> f (g x) ;
 
-(\x -> x) (\x -> x)
+id :: forall a . a -> a 
+id = \x -> x ;
 
-(\x -> x)
+auto :: (forall a . a -> a) -> (forall a . a -> a)
+auto = id ;
 
-
-x : (\x -> x) | x
-
-
-contains :: forall a . List a -> Bool
-contains = \l -> case l of
-  | Nil -> False
-  | Cons x xs -> 
-
-and :: Bool -> Bool -> Bool
-and = \x -> \y ->
-  case x of
-    | True ->
-    
-injr :: forall a b . b -> (forall r . (a -> r) -> (b -> r) -> r)
-injr = \y -> \f -> \g -> g y ;
+compose auto auto

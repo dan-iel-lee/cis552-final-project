@@ -385,6 +385,7 @@ inferType env (App h es) = do
   -- generate a substitution to get rid of instantiation vars
   let together = resTy : argTys
   sub <- substInstToUni (fivs together)
+  -- throwError (display resTy)
   -- generate the requisite constraints for the argument types
   forM_ (zip es argTys) (\(e, t) -> checkType env e (subst sub t))
   return $ subst sub resTy
@@ -393,7 +394,8 @@ inferType env (App h es) = do
 inferType env (Var v) = do
   ty <- tLookup v (getExpVars env)
   -- instantiate with new variables (to support generalization)
-  instUV ty
+  -- instUV ty
+  return ty
 inferType env (Annot e t) =
   let rest = checkType env e t
    in do
@@ -401,7 +403,9 @@ inferType env (Annot e t) =
         ((), constraints@(TR cs _)) <- listen rest
         -- if throwError $ show (map display cs)
         case solve constraints of
-          Left err -> throwError err
+          Left err -> do
+            -- throwError $ "ERROR: " <> show (map display cs)
+            throwError err
           Right _ -> return t
 -- ensure no free variables
 inferType _ (C (DC _ ty)) = return ty -- // TODO: check if ty is actually a type
@@ -621,6 +625,7 @@ instantiateAux env (UVarTy v) (e : es) = do
   resTV <- freshUV
   -- v ~ argTV -> resTV
   let newType = FunTy (UVarTy argTV) (UVarTy resTV)
+  -- throwError ("DhfpOIUDFH")
   equate (UVarTy v) newType
   -- check with new type
   instantiateAux env newType (e : es)
@@ -815,8 +820,42 @@ mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
     Nothing -> throwError "type constructors are different; don't unify"
 mgu (Forall xs ty1) (Forall ys ty2) -- // TODO: make this workkkk
   | length xs == length ys = mgu ty1 ty2
-mgu (VarTy x) (VarTy y) | x == y = return mempty
+-- VarTy checks defered until alphaEquiv
+mgu (VarTy x) (VarTy y) = return mempty
 mgu ty1 ty2 = throwError $ "types don't unify " <> show ty1 <> " " <> show ty2
+
+-- check if a type with ONLY TYPE VARIABLES is alpha equivalent
+alphaEquiv :: Type -> Type -> Either String ()
+alphaEquiv t1 t2 = do
+  alphaEquivAux t1 t2
+  return ()
+
+alphaEquivAux :: (MonadError String m) => Type -> Type -> m (Substitution TypeVariable)
+-- create a substitution when encountering two variables
+alphaEquivAux (VarTy x) (VarTy y) = return $ singSubst x (VarTy y)
+-- for foralls, ensure they have the same length, and then just continue
+alphaEquivAux (Forall xs ty1) (Forall ys ty2)
+  | length xs == length ys = alphaEquivAux ty1 ty2
+-- for primitives, just empty subst
+alphaEquivAux IntTy IntTy = return emptySubst
+alphaEquivAux BoolTy BoolTy = return emptySubst
+-- for type constructors, recurse
+alphaEquivAux (FunTy l r) (FunTy l' r') = do
+  s1 <- alphaEquivAux l l'
+  s2 <- alphaEquivAux (subst s1 r) (subst s1 r')
+  return (s2 `after` s1)
+alphaEquivAux (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
+  case tc1 `testEquality` tc2 of
+    Just Refl ->
+      foldM
+        ( \acc (ty1, ty2) -> do
+            sbst <- alphaEquivAux ty1 ty2
+            return (sbst `after` acc)
+        )
+        emptySubst
+        (zipWith (,) vec1 vec2)
+    Nothing -> throwError "type constructors aren't alpha equiv"
+alphaEquivAux ty1 ty2 = throwError $ "types aren't alpha equiv " <> display ty1 <> " " <> display ty2
 
 -- | Calls inferTy to generate a type and the constraints
 genConstraints :: TypeEnv -> Expression -> Either String (Type, TcRes)
@@ -824,19 +863,22 @@ genConstraints env = runTc . inferType env
 
 -- | Solve a list of constraints. Used after inferType
 solve :: TcRes -> Either String (Substitution UniVariable)
-solve tr@(TR cs bs) = do
-  sub <-
-    foldM
-      ( \s1 (Equal t1 t2) -> do
-          s2 <- mgu (subst s1 t1) (subst s1 t2)
-          return (s2 `after` s1)
-      )
-      emptySubst
-      cs
-  return sub -- // TODO: check bounds
-  -- if isSubstValid sub bs
-  --   then return sub
-  --   else throwError $ "constraint solving failed " <> show (fmap display sub) <> "   " <> show bs
+solve tr@(TR cs bs) =
+  foldM
+    ( \s1 (Equal t1 t2) -> do
+        s2 <- mgu (subst s1 t1) (subst s1 t2)
+        -- check alpha equivalence
+        let s' = s2 `after` s1
+        alphaEquiv (subst s' t1) (subst s' t2)
+        return (s2 `after` s1)
+    )
+    emptySubst
+    cs
+
+-- return sub -- // TODO: check bounds
+-- if isSubstValid sub bs
+--   then return sub
+--   else throwError $ "constraint solving failed " <> show (fmap display sub) <> "   " <> show bs
 
 -- | AND monoid instance for Bool, used by `isTypeValid`
 instance Monoid Bool where
@@ -874,7 +916,7 @@ typeInference env e = do
   s <- solve constraints
   return (subst s ty)
 
-putCstrts :: FilePath -> IO () 
+putCstrts :: FilePath -> IO ()
 putCstrts fp = do
   e <- parseFile fp
   case genConstraints emptyEnv e of
@@ -940,9 +982,10 @@ generalize env m = do
       let fuvs = fuv sty `minus` fuvCtx (getExpVars env)
           tvs = map (\(UV v) -> toLower v) (Set.toList fuvs)
           sub = substUniToType fuvs
-      return $ if tvs == "" 
-        then subst sub sty
-        else Forall tvs (subst sub sty)
+      return $
+        if tvs == ""
+          then subst sub sty
+          else Forall tvs (subst sub sty)
 
 minus :: Ord a => Set a -> Set a -> Set a
 minus = Set.foldr Set.delete

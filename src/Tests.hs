@@ -24,6 +24,12 @@ import Types
 ===================================================
 -}
 
+{-
+===================================================
+                      Other
+===================================================
+-}
+
 isFailing :: Either a b -> Test
 isFailing (Left _) = TestCase $ assert True
 isFailing (Right _) = TestCase $ assert False

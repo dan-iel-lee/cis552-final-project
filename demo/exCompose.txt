@@ -4,7 +4,7 @@ compose = \f -> \g -> \x -> f (g x) ;
 id :: forall a . a -> a 
 id = \x -> x ;
 
-auto :: (forall a . a -> a) -> (forall a . a -> a)
+auto :: (forall a . a -> a) -> (forall b . b -> b)
 auto = id id ;
 
-compose auto auto
+compose auto auto id

@@ -27,7 +27,18 @@ type StepResult = Either String Expression
   | x == y = e
 s 🔥 (Annot e' ty) = Annot (s 🔥 e') ty
 s 🔥 If e e1 e2 = If (s 🔥 e) (s 🔥 e1) (s 🔥 e2)
-s 🔥 Case e bs = Case (s 🔥 e) (map (second (s 🔥)) bs)
+s@(x, _) 🔥 Case e bs = Case (s 🔥 e) (map caseMapper bs)
+  where
+    caseMapper :: (Pattern, Expression) -> (Pattern, Expression)
+    caseMapper (p, e)
+      | patBound p = (p, e)
+      | otherwise = (p, s 🔥 e)
+
+    -- check if the variable was bound in the pattern
+    patBound :: Pattern -> Bool
+    patBound (P _ ps) = foldr (\p acc -> patBound p || acc) False ps
+    patBound (VarP y) = x == y
+    patBound _ = False
 s 🔥 Op b l r = Op b (s 🔥 l) (s 🔥 r)
 s@(x, _) 🔥 Lam y e'
   | x == y = Lam y e'

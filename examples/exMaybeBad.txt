@@ -1,0 +1,5 @@
+a = \x ->
+  let g = \y -> x in
+    g ;
+
+a

@@ -27,12 +27,15 @@ source-repository head
 
 library
   exposed-modules:
+      Eval2
       Eval
       Lib
       Parser
       ParserCombinators
       TypeInf
+      TestInfEval
       Types
+      SimpleEval
   other-modules:
       Paths_project_cis552
   hs-source-dirs:

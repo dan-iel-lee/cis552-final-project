@@ -190,16 +190,17 @@ class (Ord a, Show a) => Subst a where
   -- | Create substitution assigning variable to a type
   -- // TODO: probably wanna separate these out cause currently relying on them being far apart
   varAsgn :: MonadError [Char] m => Char -> Type -> m (Substitution a)
-  varAsgn b t
-    | t == UVarTy (UV b) = return emptySubst
-    | t == IVarTy (IV b) = return emptySubst
-    | UV b `Set.member` freeV t =
-      throwError $
-        "occur check fails: " ++ show b ++ " in " ++ show t
-    | IV b `Set.member` freeV t =
-      throwError $
-        "occur check fails: " ++ show b ++ " in " ++ show t
-    | otherwise = return $ singSubst (wrap b) t
+
+-- varAsgn b t
+--   | t == UVarTy (UV b) = return emptySubst
+--   | t == IVarTy (IV b) = return emptySubst
+--   | UV b `Set.member` freeV t =
+--     throwError $
+--       "occur check fails: " ++ show b ++ " in " ++ show t
+--   | IV b `Set.member` freeV t =
+--     throwError $
+--       "occur check fails: " ++ show b ++ " in " ++ show t
+--   | otherwise = return $ singSubst (wrap b) t
 
 -- | Helper function to perform a substitution on a typing environment
 substEnv :: Subst a => Substitution a -> TypeEnv -> TypeEnv
@@ -219,6 +220,13 @@ instance Subst InstVariable where
 
   freeV = fiv
 
+  varAsgn b t
+    | t == IVarTy (IV b) = return emptySubst
+    | IV b `Set.member` freeV t =
+      throwError $
+        "occur check fails: " ++ show b ++ " in " ++ show t
+    | otherwise = return $ singSubst (wrap b) t
+
 -- do s1 on s2, then union
 
 instance Subst UniVariable where
@@ -236,6 +244,13 @@ instance Subst UniVariable where
 
   freeV = fuv
 
+  varAsgn b t
+    | t == UVarTy (UV b) = return emptySubst
+    | UV b `Set.member` freeV t =
+      throwError $
+        "occur check fails: " ++ show b ++ " in " ++ show t
+    | otherwise = return $ singSubst (wrap b) t
+
 instance Subst TypeVariable where
   -- data Substitution TypeVariable = SU (Map TypeVariable Type) deriving (Show, Eq)
   wrap = id
@@ -251,6 +266,7 @@ instance Subst TypeVariable where
   subst _ t = t
 
   freeV = ftv
+  varAsgn = error "Type variables should never be assigned"
 
 -- | substitute out all instantiation variables for freshUV unification variables
 substInstToUni :: Foldable f => f InstVariable -> TcMonad (Substitution InstVariable)
@@ -391,11 +407,11 @@ inferType env (App h es) = do
   return $ subst sub resTy
 
 -- from application head type inference judgement
-inferType env (Var v) = do
-  ty <- tLookup v (getExpVars env)
-  -- instantiate with new variables (to support generalization)
-  -- instUV ty
-  return ty
+inferType env (Var v) = tLookup v (getExpVars env) -- NOTE: got rid of instantiation cause we sometimes don't want that (i.e. App head)
+-- ty <-
+-- -- instantiate with new variables (to support generalization)
+-- -- instUV ty
+-- return ty
 inferType env (Annot e t) =
   let rest = checkType env e t
    in do
@@ -409,7 +425,6 @@ inferType env (Annot e t) =
           Right _ -> return t
 -- ensure no free variables
 inferType _ (C (DC _ ty)) = return ty -- // TODO: check if ty is actually a type
-
 -- PRIMITIVES
 inferType _ (IntExp _) = return IntTy
 inferType _ (BoolExp _) = return BoolTy
@@ -431,11 +446,12 @@ inferType env (Case e pes) = do
     mapM
       ( \(pat, exp) -> do
           newEnv <- instantiateCase env [ty] [pat]
-          inferType newEnv exp
+          inferType newEnv (App exp [])
       )
       pes
   -- freshUV type variable
   alpha <- UVarTy <$> freshUV
+  -- throwError (show alpha)
   -- make sure every type is equal
   mapM_ (equate alpha) tys
   return alpha
@@ -504,7 +520,7 @@ checkType env (Lam x e) t@(UVarTy _) = do
   -- do the usual lambda check
   let newEnv = env |: (x, UVarTy argTy)
   checkType newEnv e (UVarTy resTy)
-checkType _ e@(Lam _ _) ty = throwError $ "Invalid type for lambda at: " <> display e <> " TYPE: " <> show ty -- // TODO: replace with pretty print
+checkType _ e@(Lam _ _) ty = throwError $ "Invalid type for lambda at: " <> display e <> " TYPE: " <> display ty
 -- APP
 checkType env (App h es) ty = do
   -- infer type of head
@@ -550,7 +566,7 @@ checkType env (Case e pes) retTy = do
   mapM_
     ( \(pat, exp) -> do
         newEnv <- instantiateCase env [ty] [pat]
-        checkType newEnv exp retTy
+        checkType newEnv (App exp []) retTy -- surround by App so that foralls are instantiated
     )
     pes
 checkType env (If e1 e2 e3) resTy = do
@@ -687,18 +703,17 @@ instantiateCase env (ty : tys) (VarP x : xs) = do
   resEnv <- instantiateCase env tys xs
   return $ resEnv |: (x, ty)
 instantiateCase env (ty : tys) (P (DC _ cTy) ps : xs) = do
-  -- -- get type of constructor
-  cTy <- inst cTy
+  -- instantiate constructor type with Unification Variables
+  cTy <- instUV cTy
+  -- convert to a list of types
   let tys' = typeToList cTy
-  -- throwError ("instCase: " <> show tys')
+  -- split it into the argument types and return type
   (tys'', retTy) <- splitLast tys'
-  -- unify data constructor return type and actual type
-  sub <- mguQL env retTy ty
-  -- throwError $ "infer case tys: " <> show retTy <> " " <> show ty
-  -- perform substitution on remaining stuff
-  let tys3 = map (subst sub) tys''
+  -- ensure that the return type is the type we're looking for
+  equate retTy ty
   -- check this constructor
-  env1 <- instantiateCase env tys3 ps
+  env1 <- instantiateCase env tys'' ps
+  -- check the rest
   env2 <- instantiateCase env tys xs
   return (env <> env1 <> env2)
 instantiateCase env [] [] = return env
@@ -805,6 +820,7 @@ mgu (FunTy l r) (FunTy l' r') = do
   s1 <- mgu l l'
   s2 <- mgu (subst s1 r) (subst s1 r')
   return $ s2 `after` s1
+mgu (UVarTy (UV a)) (UVarTy (UV b)) | a == b = return emptySubst
 mgu (UVarTy (UV a)) t = varAsgn a t -- // TODO: do we need to inforce mono here?
 mgu t (UVarTy (UV a)) = varAsgn a t
 mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
@@ -839,6 +855,8 @@ alphaEquivAux (Forall xs ty1) (Forall ys ty2)
 -- for primitives, just empty subst
 alphaEquivAux IntTy IntTy = return emptySubst
 alphaEquivAux BoolTy BoolTy = return emptySubst
+-- same for equal unification variables
+alphaEquivAux (UVarTy a) (UVarTy b) | a == b = return emptySubst
 -- for type constructors, recurse
 alphaEquivAux (FunTy l r) (FunTy l' r') = do
   s1 <- alphaEquivAux l l'
@@ -866,10 +884,12 @@ solve :: TcRes -> Either String (Substitution UniVariable)
 solve tr@(TR cs bs) =
   foldM
     ( \s1 (Equal t1 t2) -> do
+        -- catchError (mgu (subst s1 t1) (subst s1 t2)) (\e -> throwError $ "Mgu: " <> display t1 <> " " <> display t2)
         s2 <- mgu (subst s1 t1) (subst s1 t2)
         -- check alpha equivalence
         let s' = s2 `after` s1
         alphaEquiv (subst s' t1) (subst s' t2)
+        -- catchError (alphaEquiv (subst s' t1) (subst s' t2)) (\e -> throwError $ "Alpha: " <> display t1 <> " " <> display t2)
         return (s2 `after` s1)
     )
     emptySubst
@@ -908,13 +928,14 @@ isTypeValid s = foldTy valFolder
 -- | Really puts everything together. Goes from an environment
 -- and expression to either a type of an error.
 typeInference :: TypeEnv -> Expression -> Either String Type
-typeInference env e = do
-  (ty, constraints@(TR cs _)) <- genConstraints env e
-  -- throwError $ "ERROR: " <> display ty <> " " <> show (map display cs)
-  -- throwError $ display ty <> " CSTRS: " <> show constraints
-  -- throwError $ show constraints
-  s <- solve constraints
-  return (subst s ty)
+typeInference env e = fst <$> runTc (generalize env (inferType env e))
+
+-- (ty, constraints@(TR cs _)) <- genConstraints env e
+-- -- throwError $ "ERROR: " <> display ty <> " " <> show (map display cs)
+-- -- throwError $ display ty <> " CSTRS: " <> show constraints
+-- -- throwError $ show constraints
+-- s <- solve constraints
+-- (ty, res) <-
 
 putCstrts :: FilePath -> IO ()
 putCstrts fp = do
@@ -972,6 +993,8 @@ isValid = undefined
 generalize :: TypeEnv -> TcMonad Type -> TcMonad Type
 generalize env m = do
   (ty, constraints@(TR cs _)) <- listen m
+  -- throwError (display ty)
+  -- throwError (show $ map display cs)
   case solve constraints of
     Left err -> do
       -- throwError $ "ERROR: " <> display ty <> " " <> show (map display cs)
@@ -982,6 +1005,7 @@ generalize env m = do
       let fuvs = fuv sty `minus` fuvCtx (getExpVars env)
           tvs = map (\(UV v) -> toLower v) (Set.toList fuvs)
           sub = substUniToType fuvs
+      -- throwError (display ty)
       return $
         if tvs == ""
           then subst sub sty

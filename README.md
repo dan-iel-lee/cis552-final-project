@@ -28,7 +28,7 @@
 - [ ] quick look properties
   - [ ] instantiation variables don't escape App case
 ## Most important
-- [ ] make sure UVs are generalized at the end
+- [x] make sure UVs are generalized at the end
 - [ ] constraint scoping
 
 ## What I figured out today 12/12

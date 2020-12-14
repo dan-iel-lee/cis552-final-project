@@ -577,6 +577,15 @@ checkType env (If e1 e2 e3) resTy = do
   checkType env e3 resTy
 checkType env e@(Annot _ _) ty' = checkType env (App e []) ty'
 checkType env e@(Var _) ty' = checkType env (App e []) ty'
+checkType env (Let x e1 e2) ty = do
+  tv <- UVarTy <$> freshUV
+  resTy <- generalize env $ inferType (env |: (x, tv)) e1
+  -- throwError (show resTy)
+  let innerTy = case resTy of
+        Forall vs ty -> ty
+        ty -> ty
+  equate innerTy tv
+  checkType (env |: (x, resTy)) e2 ty
 checkType env e ty = throwError $ "Fail checkType: " <> show env <> " EXP: " <> show e <> " TYPE: " <> show ty
 
 {-

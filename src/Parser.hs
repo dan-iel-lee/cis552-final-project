@@ -653,14 +653,14 @@ indented = PP.render . pp
 -- quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
 -- quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
 
-instance Arbitrary Expression where
-  arbitrary = sized genExp
-  shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
-  -- shrink (Case e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
-  shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
-  shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
-  shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
-  shrink _ = []
+-- instance Arbitrary Expression where
+--   arbitrary = sized genExp
+--   shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+--   -- shrink (Case e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
+--   shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
+--   shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+--   shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+--   shrink _ = []
 
 genPattern :: Gen Pattern
 genPattern =

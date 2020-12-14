@@ -29,6 +29,7 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Writer
 import Data.Char (toLower)
+import Data.Either (isRight)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
@@ -996,7 +997,7 @@ exp =
 
 -- | Used by Eval to filter ill-typed expressions
 isValid :: Expression -> Bool
-isValid = undefined
+isValid e = isRight (typeInference emptyEnv e)
 
 -- | Take a type, solve current constraints, and add Foralls for unbound variables
 generalize :: TypeEnv -> TcMonad Type -> TcMonad Type

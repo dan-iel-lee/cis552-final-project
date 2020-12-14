@@ -13,7 +13,6 @@ import qualified Data.Set as Set
 import Data.Vec.Lazy (Vec (VNil))
 import Eval2
 import Parser ()
-import Test.HUnit
 import Test.QuickCheck
 import TypeInf
 import Types
@@ -33,7 +32,7 @@ arbFreshVar :: GenCtx -> Gen Variable
 arbFreshVar ctx = elements $ Set.toList allowedS
   where
     bound = Set.fromList (Map.keys ctx)
-    total = Set.fromList $ (: []) <$> ['a' .. 'z']
+    total = Set.fromList $ (: []) <$> ['A' .. 'z']
     allowedS = total `Set.difference` bound
 
 -- instance Enum String where
@@ -226,3 +225,6 @@ preservation e =
             case (ty1, ty2) of
               (Right ty1', Right ty2') -> isRight $ alphaEquiv ty1' ty2'
               _ -> False
+
+quickCheckN :: (Testable prop) => Int -> prop -> IO ()
+quickCheckN n = quickCheck . withMaxSuccess n

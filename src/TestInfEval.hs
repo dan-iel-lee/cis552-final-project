@@ -3,28 +3,69 @@ module TestInfEval where
 import Control.Monad.Except
 import Control.Monad.Fix
 import Data.Either (isRight)
-import Data.Map as Map
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Set (Set)
 import Data.Vec.Lazy (Vec (VNil))
 import Eval2
-import Parser
+import Parser ()
 import Test.HUnit
 import Test.QuickCheck
-  ( Args (maxSize, maxSuccess),
-    Property,
-    Testable,
-    quickCheckWith,
-    stdArgs,
-    (==>),
-  )
 import TypeInf
 import Types
 
 {-
 ===================================================
-                    Tests
+                    Generators
 ===================================================
 -}
 
+type GenCtx = Map Variable Type
+
+arbVar :: GenCtx -> Gen Variable
+arbVar = elements . Map.keys
+
+arbNat :: Gen Int
+arbNat = fmap abs arbitrary
+
+genExp :: Set Type -> GenCtx -> Int -> Gen Expression
+genExp tys ctx 0 = case Map.keys ctx of
+  [] ->
+    oneof
+      [ fmap IntExp arbNat,
+        fmap BoolExp arbitrary
+      ]
+  _ ->
+    oneof
+      [ fmap Var (arbVar ctx),
+        fmap IntExp arbNat,
+        fmap BoolExp arbitrary
+      ]
+-- genExp :: Int -> Gen Expression
+genExp tys ctx n =
+  frequency
+    [ (1, fmap Var (arbVar ctx)),
+      (1, fmap IntExp arbNat),
+      (1, fmap BoolExp arbitrary),
+      (7, liftM3 Op arbitrary (genExp n') (genExp n')),
+      (4, liftM2 Case (genExp n') patternList),
+      (7, liftM2 Lam arbVar (genExp n')),
+      (4, liftM2 App (genExp n') exprList),
+      (7, liftM3 Let arbVar (genExp n') (genExp n'))
+    ]
+  where
+    n' = n `div` 2
+    patternList :: Gen [(Pattern, Expression)]
+    patternList = foldr (liftM2 (:)) (return []) (replicate n' $ liftM2 (,) genPattern (genExp n'))
+    exprList :: Gen [Expression]
+    exprList = foldr (liftM2 (:)) (return []) $ replicate n' (genExp n')
+
+-- genExp 0 =
+--   oneof
+--     [ fmap Var arbVar,
+--       fmap IntExp arbNat,
+--       fmap BoolExp arbitrary
+--     ]
 {-
 ===================================================
                 Type Inf and Eval

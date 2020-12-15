@@ -22,7 +22,7 @@ import Types
 
 {-
 ===================================================
-                    Eval
+                    Evaluator
 ===================================================
 -}
 
@@ -162,6 +162,7 @@ evalB _ _ _ = throwError "Invalid argument to binary operator"
 
 type Substitution = [(Variable, Expression)]
 
+-- | Pattern match helper which checks if a pattern and expression match
 patternMatch :: Expression -> Pattern -> Either String Substitution
 patternMatch (IntExp i) (IntP p) | i == p = return []
 patternMatch (BoolExp b) (BoolP p) | b == p = return []
@@ -180,9 +181,6 @@ patternMatch (App (C dt) l) (P dt' ps) =
         (zip l ps)
     else throwError "Bro no"
 patternMatch _ _ = throwError "BROOO"
-
--- potential quickcheck property
--- everything that's not a value steps to something
 
 -- -- | Searches through all cases, and tries to match against a simplified expression
 findCase :: Expression -> [(Pattern, Expression)] -> StepResult

@@ -35,6 +35,7 @@ library
       TestInfEval
       Types
       Generators
+      ParserTest
   other-modules:
       Paths_project_cis552
   hs-source-dirs:

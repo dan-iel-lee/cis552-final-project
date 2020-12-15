@@ -5,7 +5,7 @@ module TestInfEval where
 
 import Control.Monad.Except
 import Control.Monad.Fix
-import Data.Either (isRight)
+import Data.Either (isLeft, isRight)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -28,7 +28,7 @@ import Types
 -- // TODO: allow for type variables
 {-
 ===================================================
-                    Eval Unit Tests
+                Eval Unit Tests
 ===================================================
 -}
 
@@ -116,6 +116,46 @@ testFunctions =
         ~: eval (Let "y" (IntExp 3) (Let "x" (Lam "a" (Var "y")) (Let "y" (IntExp 17) (App (Var "x") [IntExp 4])))) ~?= Right (IntExp 3)
     ]
 
+-- TYPE INF
+
+good1 = Let "f" (Lam "x" (var "x")) (App (Var "f") [IntExp 1])
+
+-- test constraint solving:
+-- let f = \x -> x + 1 in (f 1)
+good2 = Let "f" (Lam "x" (Op Plus (var "x") (IntExp 1))) (App (Var "f") [IntExp 1])
+
+-- test Spine based application
+-- (\x,y -> x + y) 1 2
+good3 = App (Lam "x" (Lam "y" (Op Plus (var "x") (var "y")))) [IntExp 1, IntExp 2]
+
+-- test polymorphism
+-- let f = \x -> x in let a = f True in f 1
+good4 = Let "f" (Lam "x" (App (Var "x") [])) (Let "a" (App (Var "f") [IntExp 1]) (App (Var "f") [BoolExp True]))
+
+-- partial application
+-- (\x, y -> x + y) 1
+good5 = App (Lam "x" (Lam "y" (Op Plus (var "x") (var "y")))) [IntExp 1]
+
+-- BAD CASES
+-- bad operator parameters
+bad1 = Op Plus (IntExp 1) (BoolExp True)
+
+-- wrong shape
+bad2 = App (Lam "x" (Op Plus (var "x") (IntExp 1))) [IntExp 1, IntExp 2]
+
+testTypeInf =
+  TestList
+    [ -- good
+      typeInference emptyEnv good1 ~?= Right IntTy,
+      typeInference emptyEnv good2 ~?= Right IntTy,
+      typeInference emptyEnv good3 ~?= Right IntTy,
+      typeInference emptyEnv good4 ~?= Right BoolTy,
+      typeInference emptyEnv good5 ~?= Right (FunTy IntTy IntTy),
+      -- bad
+      isLeft (typeInference emptyEnv bad1) ~?= True,
+      isLeft (typeInference emptyEnv bad2) ~?= True
+    ]
+
 {-
 ===================================================
       Type Inf and Eval QuickCheck Properties
@@ -178,7 +218,6 @@ tests = do
       ( TestList
           [testsFailing, testLet, testCasing, testIfs, testUserDefined, testFunctions]
       )
-  quickCheckN 75 progress
-  quickCheckN 75 preservation
-  quickCheckN 75 prop_roundtrip
+  quickCheck progress
+  quickCheck preservation
   return ()

@@ -20,17 +20,22 @@ import Prelude hiding (flip)
 ===================================================
 -}
 
+{-
+===================================================
+              Expression Generator:
+  Intelligently anticipated types and variables in
+  context to generate a mostly evaluatable express-
+  -ion
+===================================================
+-}
+
 type GenCtx = Map Variable Type
 
+-- | Generates an arbitrary variable visible from context
 arbVar :: GenCtx -> Gen Variable
 arbVar = elements . Map.keys
 
-arbPattern :: Type -> GenCtx -> Gen Pattern
-arbPattern ty ctx = case ty of
-  IntTy -> frequency [(4, IntP <$> arbNat), (1, VarP <$> arbFreshVar ctx)]
-  BoolTy -> frequency [(4, BoolP <$> arbitrary), (1, VarP <$> arbFreshVar ctx)]
-  _ -> VarP <$> arbFreshVar ctx
-
+-- | Generates a fresh new variable name not already in context
 arbFreshVar :: GenCtx -> Gen Variable
 arbFreshVar ctx = elements $ Set.toList allowedS
   where
@@ -38,20 +43,21 @@ arbFreshVar ctx = elements $ Set.toList allowedS
     total = Set.fromList $ (: []) <$> ['a' .. 'z']
     allowedS = total -- `Set.difference` bound
 
--- instance Enum String where
---   toEnum n
---     | n < 26 = [toEnum (n + 97)]
---     | otherwise =
---       let rest = toEnum (n - 26)
---        in toEnum (n `mod` 26 + 97) : rest
-
+-- | Generates a natural number
 arbNat :: Gen Int
 arbNat = fmap abs arbitrary
 
+-- | Generates a pattern (for a pattern match) based on result type + context
+arbPattern :: Type -> GenCtx -> Gen Pattern
+arbPattern ty ctx = case ty of
+  IntTy -> frequency [(4, IntP <$> arbNat), (1, VarP <$> arbFreshVar ctx)]
+  BoolTy -> frequency [(4, BoolP <$> arbitrary), (1, VarP <$> arbFreshVar ctx)]
+  _ -> VarP <$> arbFreshVar ctx
+
+-- | Function used to generate expressions based on a desired result type and
+-- | running context of types available
+-- | Goal: generate expressions which are *mostly* evaluatable + typecheck
 genExp :: Type -> GenCtx -> Int -> Gen Expression
--- genExp IntTy _ 0 = IntExp <$> arbNat
--- genExp BoolTy _ 0 = BoolExp <$> arbitrary
--- // TODO: change to frequencies
 genExp ty ctx n = frequency $
   case n of
     0 -> if null n0 then [(1, return (IntExp 1))] else n0
@@ -151,6 +157,7 @@ genExp ty ctx n = frequency $
       b <- genExp IntTy ctx n'
       return (Op op a b)
 
+    -- generates let statements
     letGen = do
       -- get a fresh variable
       x <- arbFreshVar ctx
@@ -164,6 +171,7 @@ genExp ty ctx n = frequency $
       e2 <- genExp ty newCtx n'
       return (Let x e1 e2)
 
+    -- generates if statements
     ifGen = do
       bexp <- genExp BoolTy ctx n'
       e1 <- genExp ty ctx n'
@@ -181,7 +189,7 @@ genExp ty ctx n = frequency $
       res <- genExp resTy newCtx n'
       return (p, res)
 
-    -- do casing here
+    -- generates case statements
     caseGen = do
       -- generate an expression to case over, must be a super simple type
       pTy <- elements [IntTy, BoolTy]
@@ -200,6 +208,7 @@ genExp ty ctx n = frequency $
 
     mTyGen = resize n' (sized genTypeMono)
 
+    -- generates application statement
     appGen = do
       -- generate an arbitrary (small) natural number for argument count
       argCount <- (\n -> 1 + n `div` 5) <$> arbNat
@@ -213,17 +222,24 @@ genExp ty ctx n = frequency $
       args <- mapM (\ty' -> genExp ty' ctx n') tys
       return (App head args)
 
+{-
+===================================================
+              Type Generator:
+  Generates valid types which can be plugged into
+  expression generator
+===================================================
+-}
+
 type GenTyCtx = Set TypeVariable
 
+-- | Keeps track of level of nesting (used to generate valid polymorphic function types)
 data Polarity = Pos | Neg
 
 flip :: Polarity -> Polarity
 flip Pos = Neg
 flip Neg = Pos
 
--- // TODO: allow type variables
---            this is tricky, need to know what variables we're allowed to use
-
+-- | Generates simple types
 genTypeMono :: Int -> Gen Type
 genTypeMono n = frequency $ n0 ++ ng0
   where
@@ -235,28 +251,7 @@ genTypeMono n = frequency $ n0 ++ ng0
         [ (4, FunTy <$> genTypeMono n' <*> genTypeMono n')
         ]
 
-genType :: Int -> Gen Type
-genType = genTypePol Pos
-
-genTypePol :: Polarity -> Int -> Gen Type
-genTypePol = genTypeAux Set.empty Set.empty
-
--- f :: Int -> Int -> a
--- f n m = f n m
-
--- Int -> a
--- a -> b -> a
-f :: ((a -> Int) -> b) -> b
-f g = g (const 1)
-
--- (a -> Int) -> a
-
--- (a -> Int) -> Int
-fun :: (a -> Int) -> a
-fun = fun
-
--- ((a -> Int) -> b) -> b
-
+-- | Auxiliary function used to generate types based on context and surrounding types
 genTypeAux :: Set TypeVariable -> Set TypeVariable -> Polarity -> Int -> Gen Type
 genTypeAux env argctx p n = frequency $ n0 ++ ng0 ++ varGen
   where
@@ -303,8 +298,14 @@ genTypeAux env argctx p n = frequency $ n0 ++ ng0 ++ varGen
         ]
     charGen = elements ['a' .. 'z']
 
--- forall a. a
--- let x = x in x
+genTypePol :: Polarity -> Int -> Gen Type
+genTypePol = genTypeAux Set.empty Set.empty
+
+-- | Overarching function used to generate all possible types
+genType :: Int -> Gen Type
+genType = genTypePol Pos
+
+-- | Arbitrary instance for expression
 instance Arbitrary Expression where
   arbitrary = do
     ty <- arbitrary
@@ -319,6 +320,7 @@ instance Arbitrary Expression where
   shrink (Annot e _) = [e]
   shrink _ = []
 
+-- | Arbitrary instance for type
 instance Arbitrary Type where
   arbitrary = scale (`div` 2) $ sized genType
   shrink _ = []

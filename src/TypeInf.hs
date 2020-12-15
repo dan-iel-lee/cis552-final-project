@@ -319,11 +319,11 @@ freshIV = do
   return iv
 
 -- | Looks up a variable in a context
-tLookup :: MonadError String m => Variable -> Map Variable a -> m a
+tLookup :: (Show a, MonadError String m) => Variable -> Map Variable a -> m a
 tLookup x env = do
   case Map.lookup x env of
     Just ty -> return ty
-    Nothing -> throwError $ "Unbound variable " ++ x
+    Nothing -> throwError $ "Unbound variable " ++ x ++ " " ++ (show env)
 
 -- | Fold over a type (used to implement 'fiv' and 'fuv')
 foldTy :: Monoid m => (Type -> Maybe m) -> Type -> m
@@ -476,6 +476,20 @@ inferType env (Let x e1 e2) = do
         ty -> ty
   equate innerTy tv
   inferType (env |: (x, resTy)) e2
+inferType env (Mu x e) = do
+  -- fresh unification variable for type of 'x'
+  tv <- UVarTy <$> freshUV
+  -- infer type of the rest of the expression with 'x :: tv'
+  resTy <- generalize env $ inferType (env |: (x, tv)) e
+  -- throwError (show resTy)
+  -- extract the inner type
+  let innerTy = case resTy of
+        Forall vs ty -> ty
+        ty -> ty
+  -- and add constraint that tv ~ innerTy
+  equate innerTy tv
+  return resTy
+-- inferType (env |: (x, resTy)) e2
 inferType _ _ = error "Unimplemented"
 
 fuvCtx :: Map Variable Type -> Set UniVariable
@@ -587,6 +601,9 @@ checkType env (Let x e1 e2) ty = do
         ty -> ty
   equate innerTy tv
   checkType (env |: (x, resTy)) e2 ty
+checkType env (Mu x e) ty = do
+  let newEnv = env |: (x, ty)
+  checkType newEnv e ty
 checkType env e ty = throwError $ "Fail checkType: " <> show env <> " EXP: " <> show e <> " TYPE: " <> show ty
 
 {-
@@ -727,12 +744,12 @@ instantiateCase env (ty : tys) (P (DC _ cTy) ps : xs) = do
   env2 <- instantiateCase env tys xs
   return (env <> env1 <> env2)
 -- instantiateCase _ (IntTy : tys) (IntP i : xs) = return emptyEnv
-instantiateCase _ (ty : tys) (IntP i : xs) = do
+instantiateCase env (ty : tys) (IntP i : xs) = do
   equate ty IntTy
-  return emptyEnv
-instantiateCase _ (ty : tys) (BoolP b : xs) = do
+  return env
+instantiateCase env (ty : tys) (BoolP b : xs) = do
   equate ty BoolTy
-  return emptyEnv
+  return env
 instantiateCase env [] [] = return env
 instantiateCase _ tys ps = throwError $ "Fail instantiateCase: " <> show tys <> " " <> show ps
 
@@ -954,13 +971,16 @@ typeInference env e = fst <$> runTc (generalize env (inferType env e))
 -- s <- solve constraints
 -- (ty, res) <-
 
+putCstrtsE :: Expression -> IO ()
+putCstrtsE e = case genConstraints emptyEnv e of
+  Right (ty, constraints@(TR cs _)) ->
+    mapM_ (\c -> putStrLn (display c)) cs
+  Left _ -> return ()
+
 putCstrts :: FilePath -> IO ()
 putCstrts fp = do
   e <- parseFile fp
-  case genConstraints emptyEnv e of
-    Right (ty, constraints@(TR cs _)) ->
-      mapM_ (\c -> putStrLn (display c)) cs
-    Left _ -> return ()
+  putCstrtsE e
 
 top :: FilePath -> IO ()
 top fp = do

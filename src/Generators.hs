@@ -53,12 +53,12 @@ genExp :: Type -> GenCtx -> Int -> Gen Expression
 -- genExp IntTy _ 0 = IntExp <$> arbNat
 -- genExp BoolTy _ 0 = BoolExp <$> arbitrary
 -- // TODO: change to frequencies
-genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ annotGen ++ appGenSmart
+genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ annotGen -- ++ appGenSmart
   where
     -- reduce size
     n' = n `div` 2
-    -- can always surround with annotation or find a variables
-    annotGen = [(1, (`Annot` ty) <$> genExp ty ctx n'), (1, IntExp <$> arbNat)]
+    -- can always surround with annotation or find a variable
+    annotGen = [(0, (`Annot` ty) <$> genExp ty ctx n')]
     varGen =
       -- find variables with the given type
       -- // TODO: also variables which can be instantiated to the given type
@@ -116,7 +116,7 @@ genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ annotGen ++ appGenSmart
       _ -> []
 
     -- 2b) in general, we can always surround by let, if, or app
-    ng0All = [(3, letGen), (3, appGen), (3, ifGen), (3, caseGen)]
+    ng0All = [(2, letGen), (1, appGen), (2, ifGen), (2, caseGen)]
     -- generate an operation which returns an Int
 
     intOpGen = do
@@ -139,7 +139,7 @@ genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ annotGen ++ appGenSmart
       -- insert (x, ty') into the context
       let newCtx = Map.insert x ty' ctx
       -- generate the e1 in "x = e1"
-      e1 <- genExp ty' (Map.singleton x ty') n' -- // TODO: make this not hacky
+      e1 <- genExp ty' newCtx n' -- // TODO: make this not hacky
       -- generate the body
       e2 <- genExp ty newCtx n'
       return (Let x e1 e2)
@@ -239,8 +239,8 @@ genTypeAux env argctx p n = frequency $ n0 ++ ng0 ++ varGen
     ng0 = case n of
       0 -> []
       _ ->
-        [ (4, funGen),
-          (2, faGen)
+        [ (4, funGen) -- ,
+        -- (2, faGen)
         ]
     funGen = do
       -- generate an arg type with Positivity reversed

@@ -7,8 +7,4 @@ id = \x -> x ;
 auto :: (forall a . a -> a) -> (forall b . b -> b)
 auto = id id ;
 
-<<<<<<< HEAD:examples/exCompose.txt
-compose auto
-=======
 compose auto auto id
->>>>>>> 12cd377d54cabddf8f9697eda69ca79932afee27:demo/exCompose.txt

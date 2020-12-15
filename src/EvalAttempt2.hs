@@ -1,6 +1,6 @@
 {-# LANGUAGE RecursiveDo #-}
 
-module Eval1 where
+module EvalAttempt2 where
 
 import Control.Monad.Except
 import Control.Monad.Fix
@@ -175,6 +175,64 @@ patternMatch (UserDT dt l) (P dt' ps) env =
     else (False, env)
 patternMatch _ _ env = (False, env)
 
+checkCase :: Value -> (Pattern, Expression) -> Environment -> StepResult
+checkCase v (p, e) env =
+  let (res, env') = patternMatch v p env
+   in if res
+        then retStep e env'
+        else throwError "case match invalid"
+
+findCase :: Value -> [(Pattern, Expression)] -> Environment -> StepResult
+findCase v l env = Prelude.foldr f (throwError "no matching cases") l
+  where
+    f :: (Pattern, Expression) -> StepResult -> StepResult
+    f c acc =
+      let res = checkCase v c env
+       in if isErr res then acc else res
+
+-- //TODO add user defined constructors
+
+eval :: Expression -> Environment -> Either String Value
+eval e env = do
+  step <- evalBounded e env
+  case step of
+    Step e' env' -> eval e' env'
+    Value v -> return v
+
+-- evaluates for a certain number of steps
+evalNum :: Expression -> Environment -> Int -> StepResult
+evalNum e env num = do
+  step <- evalBounded e env
+  case step of
+    Step e' env' -> if num <= 1 then retStep e' env' else evalNum e' env' (num - 1)
+    Value v -> retVal v
+
+-- | Takes in a file, prints the result of evaluation after parsing
+topEval :: FilePath -> IO ()
+topEval fs = do
+  exp <- parseFile fs
+  --print exp
+  let res = eval exp Map.empty
+  print res
+
+-- | Evaluates <= n steps in the expression
+evalStep :: Expression -> Environment -> Int -> StepResult
+evalStep e env 0 = return $ Step e env
+evalStep e env i = do
+  step <- evalBounded e env
+  if isValue step || i <= 0
+    then return step
+    else evalStep (getExpr step) (getEnv step) (i -1)
+
+-- | Takes in a file, parses expression, and prints the State and Expression of
+-- evaluation of <= n steps
+topEvalBounded :: FilePath -> Int -> IO ()
+topEvalBounded fs i = do
+  exp <- parseFile fs
+  let res = evalStep exp Map.empty i
+  case res of
+    Left err -> print err
+    Right step -> print step
 checkCase :: Value -> (Pattern, Expression) -> Environment -> StepResult
 checkCase v (p, e) env =
   let (res, env') = patternMatch v p env

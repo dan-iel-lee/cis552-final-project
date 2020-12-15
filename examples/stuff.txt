@@ -8,3 +8,29 @@ auto :: (forall a . a -> a) -> (forall a . a -> a)
 auto = id ;
 
 compose auto auto
+
+
+case j
+           | True -> \P -> j
+           | \ -> case 4
+                    | Y -> case 1
+                             | 6 -> \h -> \
+                             | z -> \i -> \
+                    | u -> case u
+                             | 14 -> \S -> j
+                             | R -> \k -> True
+
+
+preservation :: Expression -> Property
+preservation e =
+  -- if: e is well typed and not a value
+  isValid e && not (isValue e)
+    ==> isRight
+    $ do
+      -- infer starting type
+      ty1 <- typeInference emptyEnv e
+      -- take a step
+      e' <- step e
+      -- check that the expression can still be *checked* to have the same type
+      let tc = checkType emptyEnv e' ty1
+      runTc tc

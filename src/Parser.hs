@@ -280,7 +280,7 @@ dataP :: P.Parser Pattern
 dataP = commentsP (PS <$> wsP upperCaseString <*> many patternP)
 
 patternP :: P.Parser Pattern
-patternP = dataP <|> varPP <|> intPP <|> boolPP
+patternP = intPP <|> boolPP <|> varPP <|> dataP
 
 caseP :: P.Parser Expression
 caseP =
@@ -337,14 +337,14 @@ justExprP = wsP $ commentsP appPP
         <|> dcEP <|> varExprP
 
 exprP :: P.Parser Expression
-exprP = wsP $ commentsP appPP
+exprP = wsP $ commentsP sumP
   where
-    appPP = (App <$> wsP sumP <*> some (sumP <|> parenP exprP)) <|> sumP
     sumP = prodP `P.chainl1` (Op <$> addOp)
     prodP = compP `P.chainl1` (Op <$> mulOp)
-    compP = factorP `P.chainl1` (Op <$> cmpOp)
-    factorP = inlineAnnotP <|> wsP (parenP exprP) <|> baseP
-    baseP = boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP <|> caseP
+    compP = appPP `P.chainl1` (Op <$> cmpOp)
+    appPP = (App <$> wsP factorP <*> some (factorP <|> parenP exprP)) <|> factorP
+    factorP = {-inlineAnnotP <|>-} wsP (parenP exprP) <|> baseP
+    baseP = boolExprP <|> intExprP <|> caseP <|> ifP <|> lamP <|> letrecP
         <|> dcEP <|> varExprP
 
 -- ======================
@@ -695,14 +695,14 @@ prop_roundtrip s = parse (indented s) == Just s
 quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
 quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
 
--- instance Arbitrary Expression where
---   arbitrary = sized genExp
---   shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
---   -- shrink (Case e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
---   shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
---   shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
---   shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
---   shrink _ = []
+instance Arbitrary Expression where
+  arbitrary = sized genExp
+  shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  -- shrink (Case e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
+  shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
+  shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  shrink _ = []
 
 genPattern :: Gen Pattern
 genPattern =
@@ -718,7 +718,7 @@ genType n =
   frequency
     [(1, return IntTy), (1, return BoolTy), (2, liftM2 FunTy (genType n') (genType n'))]
   where
-    n' = n `div` 2
+    n' = n `div` 4
 
 genForCase :: Int -> Gen Expression
 genForCase 0 = genExp 0
@@ -727,11 +727,21 @@ genForCase n =
     [ (1, fmap Var arbVar),
       (1, fmap IntExp arbNat),
       (1, fmap BoolExp arbitrary),
-      (7, liftM3 Op arbitrary (genExp n') (genExp n')),
-      (4, liftM2 App (genExp n') (exprList n'))
+      (7, liftM3 Op arbitrary (genOp n') (genOp n')),
+      (4, liftM2 App (genAppHead n') (exprList n'))
     ]
   where
-    n' = n `div` 2
+    n' = n `div` 4
+
+genAppHead :: Int -> Gen Expression
+genAppHead 0 = fmap Var arbVar
+genAppHead n = 
+  frequency
+    [ (3, fmap Var arbVar),
+      (1, liftM2 Lam arbVar (genExp n'))
+    ]
+  where
+    n' = n `div` 4
 
 genForApp :: Int -> Gen Expression
 genForApp 0 = genExp 0
@@ -740,12 +750,25 @@ genForApp n =
     [ (1, fmap Var arbVar),
       (1, fmap IntExp arbNat),
       (1, fmap BoolExp arbitrary),
-      (7, liftM3 Op arbitrary (genExp n') (genExp n')),
+      (7, liftM3 Op arbitrary (genOp n') (genOp n')),
       (7, liftM2 Lam arbVar (genExp n')),
-      (4, liftM2 App (genExp n') (exprList n'))
+      (4, liftM2 App (genAppHead n') (exprList n'))
     ]
   where
-    n' = n `div` 2
+    n' = n `div` 4
+
+genOp :: Int -> Gen Expression
+genOp 0 = genExp 0
+genOp n =
+  frequency
+    [ (2, fmap Var arbVar),
+      (2, fmap IntExp arbNat),
+      (2, fmap BoolExp arbitrary),
+      (3, liftM3 Op arbitrary (genOp n') (genOp n')),
+      (4, liftM2 App (genAppHead n') (exprList n'))
+    ]
+  where
+    n' = n `div` 4
 
 genExp :: Int -> Gen Expression
 genExp 0 =
@@ -759,19 +782,21 @@ genExp n =
     [ (1, fmap Var arbVar),
       (1, fmap IntExp arbNat),
       (1, fmap BoolExp arbitrary),
-      (7, liftM3 Op arbitrary (genExp n') (genExp n')),
-      (4, liftM2 Case (genForCase n') (patternList n')),
+      (7, liftM3 Op arbitrary (genOp n') (genOp n')),
+      (2, liftM2 Case (genForCase n') (patternList n')),
       (7, liftM2 Lam arbVar (genExp n')),
-      (4, liftM2 App (genExp n') (exprList n')),
+      (4, liftM2 App (genAppHead n') (exprList n')),
       (7, liftM3 Let arbVar (genExp n') (genExp n'))
     ]
   where
-    n' = n `div` 2
+    n' = n `div` 4
 
 patternList :: Int -> Gen [(Pattern, Expression)]
+patternList 0 = foldr (liftM2 (:)) (return []) (replicate 1 $ liftM2 (,) genPattern (genForCase 0))
 patternList n = foldr (liftM2 (:)) (return []) (replicate n $ liftM2 (,) genPattern (genForCase n))
 
 exprList :: Int -> Gen [Expression]
+exprList 0 = foldr (liftM2 (:)) (return []) $ replicate 1 (genForApp 0)
 exprList n = foldr (liftM2 (:)) (return []) $ replicate n (genForApp n)
 
 instance Arbitrary Bop where

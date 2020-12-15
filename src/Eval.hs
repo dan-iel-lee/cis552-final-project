@@ -106,9 +106,11 @@ step (If e e1 e2)
   | not (isValue e) = do
     e' <- step e
     return $ If e' e1 e2
+-- checks if statement if simplified
 step (If (BoolExp b) e1 e2)
   | b = return e1
   | not b = return e2
+-- simplifies at least one side of operation or collapses
 step (Op b l r)
   | not (isValue l) = do
     l' <- step l
@@ -117,6 +119,7 @@ step (Op b l r)
     r' <- step r
     return $ Op b l r'
   | otherwise = evalB b l r
+-- returns expr
 step (Annot e _) = step e
 step s
   | isValue s = return s

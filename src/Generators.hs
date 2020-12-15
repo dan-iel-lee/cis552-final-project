@@ -321,4 +321,4 @@ instance Arbitrary Expression where
 
 instance Arbitrary Type where
   arbitrary = scale (`div` 2) $ sized genType
-  shrink _ = [] -- // TODO: how to shrink
+  shrink _ = []

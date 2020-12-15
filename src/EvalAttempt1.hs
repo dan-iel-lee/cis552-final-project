@@ -19,10 +19,19 @@ import Test.QuickCheck
 import qualified TypeInf as TI
 import Types
 
+type Environment = Map Variable Value
+
+data Step
+  = Step {getExpr :: Expression, getEnv :: Environment}
+  | Value {getVal :: Value}
+
+type StepResult = Either String Step
+
 data Value
   = IntVal Int
   | BoolVal Bool
-  | FunVal Variable Expression
+  | -- note! function values can go wrong when they are run
+    FunVal Variable (Value -> Step)
   | UserDT DataConstructor [Value]
 
 instance Eq Value where
@@ -32,208 +41,171 @@ instance Eq Value where
     getDCName dt == getDCName dt'
       && length l == length l'
       && Prelude.foldr (\(v1, v2) acc -> v1 == v2 && acc) True (zip l l')
-  FunVal v exp == FunVal v' exp' = v == v' && exp == exp'
   _ == _ = False
 
 instance Show Value where
   show (IntVal i) = show i
   show (BoolVal b) = show b
   show (UserDT dt l) = getDCName dt ++ " " ++ Prelude.foldr (\x acc -> show x ++ " " ++ acc) [] l
-  show (FunVal v exp) = "(\\" ++ v ++ "->" ++ show exp ++ ")"
-
-{-
-==========================================================
-
-     Potential Second Attempt at Eval that isn't gross
-
-==========================================================
--}
--- opt'ing to use variables -> expressions to avoid back and forth conversions
--- between expressions and values on lookup
-type Environment = Map Variable Expression
-
-data Step = Step {getExpr :: Expression, getEnv :: Environment}
-
-type StepResult = Either String Step
-
--- data ScopedExpression
---   = Exp Expression
---   | Fun Expression Environment
+  show (FunVal v f) = "(\\" ++ v ++ " -> " ++ show (getExpr (f (BoolVal True))) ++ ")"
 
 instance Show Step where
-  show (Step expr env) = "Expr: " ++ show expr ++ "\n" ++ "Map: " ++ show env
+  show (Step expr env) = "Expr: " ++ show expr ++ "\n" ++ "Map: " ++ show env ++ "\n"
+  show (Value v) = show v
+
+-- empty map
+emptyEnv :: Environment
+emptyEnv = Map.empty
+
+retVal :: Value -> StepResult
+retVal = return . Value
+
+retStep :: Expression -> Environment -> StepResult
+retStep e env = return $ Step e env
 
 isErr :: Either a b -> Bool
 isErr (Left _) = True
-isErr _ = False
+isErr (Right _) = False
 
-isValue :: Expression -> Bool
-isValue (IntExp _) = True
-isValue (BoolExp _) = True
-isValue (Lam _ _) = True
-isValue (C _) = True
-isValue (PC _ _) = True
+isValue :: Step -> Bool
+isValue (Value _) = True
 isValue _ = False
 
--- | Converts an expression to a "value"; we really don't need this type anymore actually
-convertToValue :: Expression -> Either String Value
-convertToValue (IntExp i) = return $ IntVal i
-convertToValue (BoolExp b) = return $ BoolVal b
-convertToValue (Lam v exp) = return $ FunVal v exp
-convertToValue (C dt) = return $ UserDT dt []
-convertToValue (PC dt l) = Prelude.foldr convertArg (return $ UserDT dt []) l
-  where
-    convertArg :: Expression -> Either String Value -> Either String Value
-    convertArg e (Right (UserDT dt l)) =
-      case convertToValue e of
-        Left x -> throwError x
-        Right v -> return $ UserDT dt (v : l)
-    convertArg _ _ = throwError "could not directly convert expression to value"
-convertToValue _ = throwError "could not directly convert expression to value"
-
--- | Tries to look up variable from environment
-vLookup' :: Variable -> Environment -> StepResult
-vLookup' x env =
+vLookup :: Variable -> Map Variable Value -> StepResult
+vLookup x env =
   case Map.lookup x env of
-    Just ty -> return $ Step ty env
+    Just ty -> retVal ty
     Nothing -> throwError $ "Unbound variable " ++ x
 
--- takes a basically eval'd function and tries to eval the operator
-evalB' :: Bop -> Expression -> Expression -> Environment -> StepResult
-evalB' Plus (IntExp i1) (IntExp i2) s = return $ Step (IntExp (i1 + i2)) s
-evalB' Minus (IntExp i1) (IntExp i2) s = return $ Step (IntExp (i1 - i2)) s
-evalB' Times (IntExp i1) (IntExp i2) s = return $ Step (IntExp (i1 * i2)) s
-evalB' Gt (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 > i2)) s
-evalB' Ge (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 >= i2)) s
-evalB' Lt (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 < i2)) s
-evalB' Le (IntExp i1) (IntExp i2) s = return $ Step (BoolExp (i1 <= i2)) s
-evalB' _ _ _ _ = throwError "Invalid argument to binary operator"
+evalB :: Bop -> Value -> Value -> Environment -> StepResult
+evalB Plus (IntVal i1) (IntVal i2) = retStep $ IntExp (i1 + i2)
+evalB Minus (IntVal i1) (IntVal i2) = retStep $ IntExp (i1 - i2)
+evalB Times (IntVal i1) (IntVal i2) = retStep $ IntExp (i1 * i2)
+evalB Gt (IntVal i1) (IntVal i2) = retStep $ BoolExp (i1 > i2)
+evalB Ge (IntVal i1) (IntVal i2) = retStep $ BoolExp (i1 >= i2)
+evalB Lt (IntVal i1) (IntVal i2) = retStep $ BoolExp (i1 < i2)
+evalB Le (IntVal i1) (IntVal i2) = retStep $ BoolExp (i1 <= i2)
+evalB _ _ _ = const . throwError $ "Invalid argument to binary operator"
 
--- | This is the main function used to evaluate a single "step" in a given expression
--- | Returns back the same expression if it couldn't be simplified further.
-evalBounded' :: Expression -> Environment -> StepResult
--- stepping primitives + operators
-evalBounded' (Var x) env = vLookup' x env
-evalBounded' exp@(IntExp _) env = return $ Step exp env
-evalBounded' exp@(BoolExp _) env = return $ Step exp env
-evalBounded' (Op o e1 e2) env = do
-  s <- evalBounded' e1 env
-  s2 <- evalBounded' e2 env
-  if isValue (getExpr s) && isValue (getExpr s2)
-    then evalB' o (getExpr s) (getExpr s2) env
-    else return $ Step (Op o (getExpr s) (getExpr s2)) env
+-- add val to environment helper
 
--- -- Converting Type Annotations
-evalBounded' (Annot exp _) env = return $ Step exp env
--- -- Converting lambda's
-evalBounded' exp@(Lam _ _) env = return $ Step exp env
--- -- Converting if statements
-evalBounded' (If cond e1 e2) env = do
-  s <- evalBounded' cond env
-  if isValue $ getExpr s
-    then case getExpr s of
-      BoolExp b -> return $ Step (if b then e1 else e2) env
-      _ -> throwError "cannot evaluate non-bool in if statement"
-    else return $ Step (getExpr s) (getEnv s)
+evalBounded :: Expression -> Environment -> StepResult
+-- simple cases + operators
 
--- -- Converting Function Application Calls
-evalBounded' (App l@(Lam v f) (e : es)) env = do
-  s <- evalBounded' e env
-  if isValue (getExpr s)
-    then return $ Step (App f es) (Map.insert v (getExpr s) (getEnv s))
-    else return $ Step (App l (getExpr s : es)) (getEnv s)
+evalBounded (Var x) env = vLookup x env
+evalBounded (IntExp i) _ = retVal $ IntVal i
+evalBounded (BoolExp i) _ = retVal $ BoolVal i
+evalBounded (Op o e e2) env = do
+  s1 <- evalBounded e env
+  s2 <- evalBounded e2 env
+  case (s1, s2) of
+    (Step e' env', _) -> retStep (Op o e' e2) env' -- step evaluator
+    (_, Step e2' env') -> retStep (Op o e e2') env'
+    (Value v, Value v2) -> evalB o v v2 env
+-- lamdba function: new version just returns same thing
 
--- -- Converting User Def Types
-evalBounded' udt@(C _) env = return $ Step udt env
-evalBounded' (App udt@(C _) []) env = return $ Step udt env
-evalBounded' (App udt@(C dt) (e : es)) env = do
-  s <- evalBounded' e env
-  if isValue (getExpr s)
-    then return $ Step (App (PC dt [getExpr s]) es) (getEnv s)
-    else return $ Step (App udt (getExpr s : es)) (getEnv s)
-evalBounded' (App udt@(PC dt l) (e : es)) env = do
-  s <- evalBounded' e env
-  if isValue (getExpr s)
-    then return $ Step (App (PC dt (l ++ [getExpr s])) es) (getEnv s)
-    else return $ Step (App udt (getExpr s : es)) (getEnv s)
--- -- Converting empty lambda calls
-evalBounded' (App l []) env = return $ Step l env
--- -- Finally handle unsimplified function applications
-evalBounded' (App f es) env =
-  if isValue f && not (Prelude.null es)
-    then throwError "cannot apply to non-function"
-    else do
-      s <- evalBounded' f env
-      return $ Step (App (getExpr s) es) env
+evalBounded (Lam x e) env = retVal $ FunVal x (\v -> Step e (Map.insert x v env))
+-- Function Application:
+-- no arguments
+evalBounded (App lam []) env = retStep lam env
+-- Applied to data constructor
+evalBounded (App (C dt) (x : xs)) env = do
+  s1 <- evalBounded x env
+  case s1 of
+    Step x' env' -> retStep (App (C dt) (x' : xs)) env'
+    _ -> retStep (App (PC dt [x]) xs) env
+-- Applied to already partially applied data constructor
+evalBounded (App (PC dt l) (x : xs)) env = do
+  s1 <- evalBounded x env
+  case s1 of
+    Step x' env' -> retStep (App (PC dt l) (x' : xs)) env'
+    _ -> retStep (App (PC dt (l ++ [x])) xs) env
+-- Applied to normal functions/everything else
+evalBounded (App lam l@(e : es)) env = do
+  t1 <- evalBounded lam env
+  t2 <- evalBounded e env
+  case (t1, t2) of
+    (Step lam' env', _) -> retStep (App lam' l) env'
+    (_, Step e' env') -> retStep (App lam (e' : es)) env'
+    (Value (FunVal _ g), Value v) -> case g v of
+      Step lam' env' -> retStep (App lam' es) env' -- apply function one round
+      _ -> throwError "app requires a function/data constructor"
+    _ -> throwError "app requires a function"
+-- Let Statements
+evalBounded (Let x e1 e2) env = mdo
+  t <- evalBounded e1 env
+  let env' = if isValue t then Map.insert x (getVal t) env else getEnv t
+  case t of
+    Step e1' _ -> retStep (Let x e1' e2) (Map.union env' env)
+    Value _ -> retStep e2 (Map.union env' env)
+evalBounded (Annot e _) env = retStep e env
+evalBounded (C dt) _ = retVal $ UserDT dt []
+-- Evaluated user defined type evaluated to some arguments
+evalBounded (PC dt l) env = retVal $ UserDT dt l'
+  where
+    l' =
+      Prelude.foldr
+        ( \x acc -> case evalBounded x env of
+            Right (Value v) -> v : acc
+            _ -> acc
+        )
+        []
+        l
+-- case
+evalBounded (Case e1 ps) env = do
+  s <- evalBounded e1 env
+  case s of
+    Step e1' env' -> retStep (Case e1' ps) env'
+    Value v -> findCase v ps env
 
--- -- Converting let statements
-evalBounded' (Let v e e2) env = mdo
-  s <- evalBounded' e env
-  let env' = Map.insert v (getExpr s) env
-  if isValue (getExpr s)
-    then return $ Step e2 env'
-    else return $ Step (Let v (getExpr s) e2) (getEnv s)
-
--- -- Converting case statements
-evalBounded' (Case e1 ps) env = do
-  s <- evalBounded' e1 env
-  if isValue $ getExpr s
-    then findCase' (getExpr s) ps env
-    else return $ Step (Case (getExpr s) ps) (getEnv s)
-
--- | Does the work of matching expressions against patterns.
---  Returns a tuple x environment since variable matches may change the environment
-patternMatch' :: Expression -> Pattern -> Environment -> (Bool, Environment)
-patternMatch' (IntExp i) (IntP p) s = (i == p, s)
-patternMatch' (BoolExp b) (BoolP p) s = (b == p, s)
-patternMatch' e (VarP x) s = (True, Map.insert x e s)
-patternMatch' (C dt) (P dt' []) s = (getDCName dt == getDCName dt', s)
-patternMatch' (PC dt l) (P dt' ps) s =
+patternMatch :: Value -> Pattern -> Environment -> (Bool, Environment)
+patternMatch (IntVal i) (IntP p) env = (i == p, env)
+patternMatch (BoolVal b) (BoolP p) env = (b == p, env)
+patternMatch v (VarP x) env = (True, Map.insert x v env)
+patternMatch (UserDT dt l) (P dt' ps) env =
   if getDCName dt == getDCName dt' && length l == length ps
     then
       Prelude.foldr
         ( \(v, p) acc ->
-            let res = patternMatch' v p (snd acc)
+            let res = patternMatch v p (snd acc)
              in (fst res && fst acc, snd res)
         )
-        (True, s)
+        (True, env)
         (zip l ps)
-    else (False, s)
-patternMatch' _ _ s = (False, s)
+    else (False, env)
+patternMatch _ _ env = (False, env)
 
--- | Checks a specific case and returns the next step if it matched
-checkCase' :: Expression -> (Pattern, Expression) -> Environment -> StepResult
-checkCase' v (p, e) s =
-  let (res, s') = patternMatch' v p s
+checkCase :: Value -> (Pattern, Expression) -> Environment -> StepResult
+checkCase v (p, e) env =
+  let (res, env') = patternMatch v p env
    in if res
-        then return $ Step e s'
+        then retStep e env'
         else throwError "case match invalid"
 
--- | Searches through all cases, and tries to match against a simplified expression
-findCase' :: Expression -> [(Pattern, Expression)] -> Environment -> StepResult
-findCase' v l s = Prelude.foldr f (throwError "no matching cases") l
+findCase :: Value -> [(Pattern, Expression)] -> Environment -> StepResult
+findCase v l env = Prelude.foldr f (throwError "no matching cases") l
   where
     f :: (Pattern, Expression) -> StepResult -> StepResult
     f c acc =
-      let res = checkCase' v c s
+      let res = checkCase v c env
        in if isErr res then acc else res
 
--- | Evaluates <= n steps in the expression
-evalStep :: Expression -> Environment -> Int -> StepResult
-evalStep e env 0 = return $ Step e env
-evalStep e env i = do
-  step <- evalBounded' e env
-  if isValue (getExpr step) || i <= 0
-    then return $ Step (getExpr step) (getEnv step)
-    else evalStep (getExpr step) (getEnv step) (i -1)
+-- //TODO add user defined constructors
 
--- | Evaluates (or tries to evaluate) to completion
 eval :: Expression -> Environment -> Either String Value
 eval e env = do
-  step <- evalBounded' e env
-  if isValue (getExpr step)
-    then convertToValue (getExpr step)
-    else eval (getExpr step) (getEnv step)
+  step <- evalBounded e env
+  case step of
+    Step e' env' -> eval e' env'
+    Value v -> return v
+
+-- evaluates for a certain number of steps
+evalNum :: Expression -> Environment -> Int -> StepResult
+evalNum e env num = do
+  step <- evalBounded e env
+  case step of
+    Step e' env' -> if num <= 1 then retStep e' env' else evalNum e' env' (num - 1)
+    Value v -> retVal v
 
 -- | Takes in a file, prints the result of evaluation after parsing
 topEval :: FilePath -> IO ()
@@ -243,10 +215,80 @@ topEval fs = do
   let res = eval exp Map.empty
   print res
 
+-- | Evaluates <= n steps in the expression
+evalStep :: Expression -> Environment -> Int -> StepResult
+evalStep e env 0 = return $ Step e env
+evalStep e env i = do
+  step <- evalBounded e env
+  if isValue step || i <= 0
+    then return step
+    else evalStep (getExpr step) (getEnv step) (i -1)
+
 -- | Takes in a file, parses expression, and prints the State and Expression of
 -- evaluation of <= n steps
 topEvalBounded :: FilePath -> Int -> IO ()
 topEvalBounded fs i = do
   exp <- parseFile fs
   let res = evalStep exp Map.empty i
+  case res of
+    Left err -> print err
+    Right step -> print step
+
+checkCase :: Value -> (Pattern, Expression) -> Environment -> StepResult
+checkCase v (p, e) env =
+  let (res, env') = patternMatch v p env
+   in if res
+        then retStep e env'
+        else throwError "case match invalid"
+
+findCase :: Value -> [(Pattern, Expression)] -> Environment -> StepResult
+findCase v l env = Prelude.foldr f (throwError "no matching cases") l
+  where
+    f :: (Pattern, Expression) -> StepResult -> StepResult
+    f c acc =
+      let res = checkCase v c env
+       in if isErr res then acc else res
+
+-- //TODO add user defined constructors
+
+eval :: Expression -> Environment -> Either String Value
+eval e env = do
+  step <- evalBounded e env
+  case step of
+    Step e' env' -> eval e' env'
+    Value v -> return v
+
+-- evaluates for a certain number of steps
+evalNum :: Expression -> Environment -> Int -> StepResult
+evalNum e env num = do
+  step <- evalBounded e env
+  case step of
+    Step e' env' -> if num <= 1 then retStep e' env' else evalNum e' env' (num - 1)
+    Value v -> retVal v
+
+-- | Takes in a file, prints the result of evaluation after parsing
+topEval :: FilePath -> IO ()
+topEval fs = do
+  exp <- parseFile fs
+  --print exp
+  let res = eval exp Map.empty
   print res
+
+-- | Evaluates <= n steps in the expression
+evalStep :: Expression -> Environment -> Int -> StepResult
+evalStep e env 0 = return $ Step e env
+evalStep e env i = do
+  step <- evalBounded e env
+  if isValue step || i <= 0
+    then return step
+    else evalStep (getExpr step) (getEnv step) (i -1)
+
+-- | Takes in a file, parses expression, and prints the State and Expression of
+-- evaluation of <= n steps
+topEvalBounded :: FilePath -> Int -> IO ()
+topEvalBounded fs i = do
+  exp <- parseFile fs
+  let res = evalStep exp Map.empty i
+  case res of
+    Left err -> print err
+    Right step -> print step

@@ -21,9 +21,12 @@ import qualified TypeInf as TI
 import Types
 
 {-
-===================================================
                     Eval
 ===================================================
+=======
+==========================================================
+     Potential Second Attempt at Eval that isn't gross
+==========================================================
 -}
 
 type StepResult = Either String Expression

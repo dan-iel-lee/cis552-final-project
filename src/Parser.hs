@@ -331,20 +331,11 @@ exprP = wsP $ commentsP sumP
   where
     sumP = prodP `P.chainl1` (Op <$> addOp)
     prodP = compP `P.chainl1` (Op <$> mulOp)
-<<<<<<< HEAD
     compP = appPP `P.chainl1` (Op <$> cmpOp)
     appPP = (App <$> wsP factorP <*> some (factorP <|> parenP exprP)) <|> factorP
     factorP = {-inlineAnnotP <|>-} wsP (parenP exprP) <|> baseP
     baseP = boolExprP <|> intExprP <|> caseP <|> ifP <|> lamP <|> letrecP
         <|> dcEP <|> varExprP
-=======
-    compP = factorP `P.chainl1` (Op <$> cmpOp)
-    factorP = inlineAnnotP <|> wsP (parenP exprP) <|> baseP
-    baseP =
-      boolExprP <|> intExprP <|> ifP <|> lamP <|> letrecP <|> caseP
-        <|> dcEP
-        <|> varExprP
->>>>>>> a095eeb34ac47b3a92d7c2fd21efcc04e0ac2694
 
 {-
 ==========================================================
@@ -374,14 +365,6 @@ decAnnotParser = do
 
 decParser :: P.Parser Declaration
 decParser = commentsP (decAnnotParser <|> decUnannotParser)
-
-exDec =
-  "-- I am comment\n\
-  \ a =\
-  \ case b -- comment hehe\n\
-  \ -- comment hehe\n\
-  \ | True -> False -- another comment\n\
-  \ | False -> True ;"
 
 -- ==============
 -- Putting stuff together
@@ -649,7 +632,13 @@ levelFunTy = 1
 indented :: PP a => a -> String
 indented = PP.render . pp
 
--- -- Roundtrip property testing
+{-
+==========================================================
+
+------------------------  TESTING ------------------------
+
+==========================================================
+-}
 
 parse :: String -> Maybe Expression
 parse s = fst <$> P.doParse exprP s
@@ -660,11 +649,9 @@ prop_roundtrip s = parse (indented s) == Just s
 quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
 quickCheckN n = quickCheckWith $ stdArgs {maxSuccess = n, maxSize = 100}
 
-<<<<<<< HEAD
 instance Arbitrary Expression where
   arbitrary = sized genExp
   shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
-  -- shrink (Case e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
   shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
   shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
   shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
@@ -773,83 +760,3 @@ arbNat = liftM abs arbitrary
 
 arbVar :: Gen Variable
 arbVar = elements $ map pure ['a' .. 'z']
-=======
--- genPattern :: Gen Pattern
--- genPattern =
---   oneof
---     [ fmap VarP arbVar,
---       fmap IntP arbNat,
---       fmap BoolP arbitrary
---     ]
-
--- genType :: Int -> Gen Type
--- genType 0 = elements [IntTy, BoolTy]
--- genType n =
---   frequency
---     [(1, return IntTy), (1, return BoolTy), (2, liftM2 FunTy (genType n') (genType n'))]
---   where
---     n' = n `div` 2
-
--- genForCase :: Int -> Gen Expression
--- genForCase 0 = genExp 0
--- genForCase n =
---   frequency
---     [ (1, fmap Var arbVar),
---       (1, fmap IntExp arbNat),
---       (1, fmap BoolExp arbitrary),
---       (7, liftM3 Op arbitrary (genExp n') (genExp n')),
---       (4, liftM2 App (genExp n') (exprList n'))
---     ]
---   where
---     n' = n `div` 2
-
--- genForApp :: Int -> Gen Expression
--- genForApp 0 = genExp 0
--- genForApp n =
---   frequency
---     [ (1, fmap Var arbVar),
---       (1, fmap IntExp arbNat),
---       (1, fmap BoolExp arbitrary),
---       (7, liftM3 Op arbitrary (genExp n') (genExp n')),
---       (7, liftM2 Lam arbVar (genExp n')),
---       (4, liftM2 App (genExp n') (exprList n'))
---     ]
---   where
---     n' = n `div` 2
-
--- genExp :: Int -> Gen Expression
--- genExp 0 =
---   oneof
---     [ fmap Var arbVar,
---       fmap IntExp arbNat,
---       fmap BoolExp arbitrary
---     ]
--- genExp n =
---   frequency
---     [ (1, fmap Var arbVar),
---       (1, fmap IntExp arbNat),
---       (1, fmap BoolExp arbitrary),
---       (7, liftM3 Op arbitrary (genExp n') (genExp n')),
---       (4, liftM2 Case (genForCase n') (patternList n')),
---       (7, liftM2 Lam arbVar (genExp n')),
---       (4, liftM2 App (genExp n') (exprList n')),
---       (7, liftM3 Let arbVar (genExp n') (genExp n'))
---     ]
---   where
---     n' = n `div` 2
-
--- patternList :: Int -> Gen [(Pattern, Expression)]
--- patternList n = foldr (liftM2 (:)) (return []) (replicate n $ liftM2 (,) genPattern (genForCase n))
-
--- exprList :: Int -> Gen [Expression]
--- exprList n = foldr (liftM2 (:)) (return []) $ replicate n (genForApp n)
-
--- instance Arbitrary Bop where
---   arbitrary = elements [Plus ..]
-
--- arbNat :: Gen Int
--- arbNat = liftM abs arbitrary
-
--- arbVar :: Gen Variable
--- arbVar = elements $ map pure ['a' .. 'z']
->>>>>>> a095eeb34ac47b3a92d7c2fd21efcc04e0ac2694

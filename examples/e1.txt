@@ -1,8 +1,6 @@
+-- y = fun x -> x
 
-
-y = fun x -> x
-
-y 3
+-- y 3
 
 
 let y = fun x -> x

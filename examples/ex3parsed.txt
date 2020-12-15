@@ -1,0 +1,9 @@
+id :: forall a  . a -> a
+let id =
+  \x -> x
+in
+  ids :: List forall a  . a -> a
+  let ids =
+    Cons id Nil 
+  in
+    Cons id ids

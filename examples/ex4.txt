@@ -1,4 +1,6 @@
+-- wow const
 const :: forall a b . a -> b -> a
-const = \x -> \y -> x ;
+const = \x -> \y -> x ; -- putting some comments here too
 
+-- applying some comments
 const True 1

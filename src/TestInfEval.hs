@@ -28,6 +28,12 @@ type GenCtx = Map Variable Type
 arbVar :: GenCtx -> Gen Variable
 arbVar = elements . Map.keys
 
+arbPattern :: Type -> GenCtx -> Gen Pattern
+arbPattern ty ctx = case ty of
+  IntTy -> frequency [(4, IntP <$> arbNat), (1, VarP <$> arbFreshVar ctx)]
+  BoolTy -> frequency [(4, BoolP <$> arbitrary), (1, VarP <$> arbFreshVar ctx)]
+  _ -> VarP <$> arbFreshVar ctx
+
 arbFreshVar :: GenCtx -> Gen Variable
 arbFreshVar ctx = elements $ Set.toList allowedS
   where
@@ -49,33 +55,35 @@ genExp :: Type -> GenCtx -> Int -> Gen Expression
 -- genExp IntTy _ 0 = IntExp <$> arbNat
 -- genExp BoolTy _ 0 = BoolExp <$> arbitrary
 -- // TODO: change to frequencies
-genExp ty ctx n = oneof $ n0 ++ ng0 ++ varGen ++ [annotGen]
+genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ [annotGen]
   where
     -- reduce size
     n' = n `div` 2
     -- can always surround with annotation or find a variables
-    annotGen = (\e -> Annot e ty) <$> genExp ty ctx n'
+    annotGen = (7, (`Annot` ty) <$> genExp ty ctx n')
     varGen =
       -- find variables with the given type
       -- // TODO: also variables which can be instantiated to the given type
       let validVars = Map.filter (== ty) ctx
        in case Map.keys validVars of
             [] -> []
-            _ -> [Var <$> arbVar validVars]
+            _ -> [(1, Var <$> arbVar validVars)]
     -- Cases
     -- 1) n = 0
     -- if n = 0, only decrease the size of the type left to generate
     n0 = case ty of
-      IntTy -> [IntExp <$> arbNat]
-      BoolTy -> [BoolExp <$> arbitrary]
+      IntTy -> [(1, IntExp <$> arbNat)]
+      BoolTy -> [(1, BoolExp <$> arbitrary)]
       FunTy t1 t2 ->
-        [ do
-            x <- arbFreshVar ctx
-            e <- genExp t2 (Map.insert x t1 ctx) n'
-            return (Lam x e)
+        [ ( 7,
+            do
+              x <- arbFreshVar ctx
+              e <- genExp t2 (Map.insert x t1 ctx) n'
+              return (Lam x e)
+          )
         ]
       -- // NOTE: don't have to worry about type var scoping
-      Forall _ ty' -> [genExp ty' ctx n]
+      Forall _ ty' -> [(7, genExp ty' ctx n)]
       _ -> []
 
     -- 2) n > 0
@@ -85,12 +93,12 @@ genExp ty ctx n = oneof $ n0 ++ ng0 ++ varGen ++ [annotGen]
 
     -- 2a) type specific cases (for ints and bools)
     ng0Specific = case ty of
-      IntTy -> [intOpGen]
-      BoolTy -> [boolOpGen]
+      IntTy -> [(7, intOpGen)]
+      BoolTy -> [(7, boolOpGen)]
       _ -> []
 
     -- 2b) in general, we can always surround by let, if, or app
-    ng0All = [letGen, appGen, ifGen]
+    ng0All = [(7, letGen), (7, appGen), (7, ifGen)]
     -- generate an operation which returns an Int
 
     intOpGen = do
@@ -124,6 +132,34 @@ genExp ty ctx n = oneof $ n0 ++ ng0 ++ varGen ++ [annotGen]
       e2 <- genExp ty ctx n'
       return (If bexp e1 e2)
 
+    -- generates a pattern given the desired pattern type and expression result type
+    patternExprGen :: Type -> Type -> GenCtx -> Gen (Pattern, Expression)
+    patternExprGen pTy resTy ctx' = do
+      -- generate some patterns + at least one wildcard variables
+      p <- arbPattern pTy ctx'
+      -- Yikes, couldn't write this in a cleaner way
+      let newCtx = (case p of VarP x -> Map.insert x pTy ctx'; _ -> ctx')
+      -- generate result of match
+      res <- genExp resTy newCtx n'
+      return (p, res)
+
+    -- do casing here
+    caseGen = do
+      -- generate an expression to case over, must be a super simple type
+      pTy <- elements [IntTy, BoolTy]
+      e1 <- genExp pTy ctx n'
+
+      -- replicate an obscure number of patterns with a wildcard
+      let count = 0
+      patterns <- replicateM count (patternExprGen pTy ty ctx)
+
+      -- makes sure to add a variable wildcard so case never fails
+      x <- arbFreshVar ctx
+      wildE <- genExp ty (Map.insert x pTy ctx) n'
+      let patterns' = patterns ++ [(VarP x, wildE)]
+
+      return (Case e1 patterns')
+
     appGen = do
       -- generate an arbitrary (small) natural number for argument count
       argCount <- (\n -> 1 + n `div` 5) <$> arbNat
@@ -156,7 +192,15 @@ instance Arbitrary Expression where
   arbitrary = do
     ty <- arbitrary
     sized (genExp ty Map.empty)
-  shrink _ = [] -- // TODO
+
+  shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  shrink (If e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
+  shrink (Lam v e1) = [Lam v e1' | e1' <- shrink e1]
+  shrink (App e1 e2) = [App e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  shrink (Let v e1 e2) = [Let v e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
+  shrink (Case e cs) = [Case e' cs | e' <- shrink e]
+  shrink (Annot e _) = [e]
+  shrink _ = []
 
 instance Arbitrary Type where
   arbitrary = sized genType
@@ -164,43 +208,6 @@ instance Arbitrary Type where
 
 -- // TODO: allow for type variables
 
--- genExp ty ctx 0 = case Map.keys ctx of
---   [] ->
---     oneof
---       [ fmap IntExp arbNat,
---         fmap BoolExp arbitrary
---       ]
---   _ ->
---     oneof
---       [ fmap Var (arbVar ctx),
---         fmap IntExp arbNat,
---         fmap BoolExp arbitrary
---       ]
--- -- genExp :: Int -> Gen Expression
--- genExp ty ctx n =
---   frequency
---     [ (1, fmap Var (arbVar ctx)),
---       (1, fmap IntExp arbNat),
---       (1, fmap BoolExp arbitrary),
---       (7, liftM3 Op arbitrary (genExp n') (genExp n')),
---       (4, liftM2 Case (genExp n') patternList),
---       (7, liftM2 Lam arbVar (genExp n')),
---       (4, liftM2 App (genExp n') exprList),
---       (7, liftM3 Let arbVar (genExp n') (genExp n'))
---     ]
---   where
---     n' = n `div` 2
---     patternList :: Gen [(Pattern, Expression)]
---     patternList = foldr (liftM2 (:)) (return []) (replicate n' $ liftM2 (,) genPattern (genExp n'))
---     exprList :: Gen [Expression]
---     exprList = foldr (liftM2 (:)) (return []) $ replicate n' (genExp n')
-
--- genExp 0 =
---   oneof
---     [ fmap Var arbVar,
---       fmap IntExp arbNat,
---       fmap BoolExp arbitrary
---     ]
 {-
 ===================================================
                 Type Inf and Eval

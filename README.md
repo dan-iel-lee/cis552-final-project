@@ -3,6 +3,7 @@
 
 ## Demo ideas
 - Propositions as types
+- [ ] print constraints
 
 
 ## TODO type checking
@@ -18,13 +19,34 @@
 - [x] Constraints scoping
   - free unification variables
   - extra construct on Constraints
-- [ ] type application
+- [x] get exList working
+- [x] fix mgu under Foralls !!!!
+  - Maybe by instantiating them and generating more constraints
 - [ ] Check the `instantiateCase` is working correctly
 - [ ] make sure order of `after` is correct in all places
+- [x] Look at paper for what strata are included in Constraints
+- [ ] quick look properties
+  - [ ] instantiation variables don't escape App case
+## Most important
+- [x] make sure UVs are generalized at the end
+- [ ] constraint scoping
+
+## What I figured out today 12/12
+- need a way to tell if types under a forall are equivalent
+- can't instantiate at Var checking (to unification variables) since quick look has to be
+  able to do its own instantiation
+
+## Things I changed from quickcheck
+- Added constraint solving at Annot
+- Added an `alphaEquiv` helper function for when unifying rho types
+- added let generalization
+
+
 - [ ] existentials?
 
 ## Properties for type checking
 - unification variables never escape their bounds/scope
+- progress and preservation
 
 ## Why abandon GADT solution?
 I'm starting to realize that enforcing stratification at the implementation level is more of a headache
@@ -42,6 +64,7 @@ see fit.
   - [x] parse types
   - [x] parse data constructors in expressions
   - [ ] ignore comments
+  - [ ] allow non-annotated
 - Type checking
   - [ ] write test cases with examples
 - Evaluator

@@ -62,7 +62,7 @@ isMono IntTy = True
 isMono BoolTy = True
 isMono (FunTy ty1 ty2) = isMono ty1 && isMono ty2
 isMono (TyCstr _ vec) = all isMono vec
-isMono (VarTy _) = True
+isMono (UVarTy _) = True
 isMono _ = False
 
 instance Eq Type where
@@ -204,6 +204,7 @@ data Expression
   | Lam Variable Expression
   | App Expression [Expression] -- ((s e1) e2) e3
   | Let Variable Expression Expression
+  | Mu Variable Expression
   deriving (Show, Eq)
 
 -- var wrapper

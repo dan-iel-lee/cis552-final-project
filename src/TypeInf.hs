@@ -28,6 +28,8 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Writer
+import Data.Char (toLower)
+import Data.Either (isRight)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
@@ -38,6 +40,8 @@ import Data.Type.Equality
 import Data.Vec.Lazy (Vec (VNil, (:::)), zipWith)
 import Parser
 import Test.HUnit
+import Text.PrettyPrint ((<+>))
+import qualified Text.PrettyPrint as PP
 import Types
 import Prelude hiding (zipWith)
 
@@ -51,6 +55,7 @@ this module.
 -}
 
 -- | The typing context
+-- ===============================
 data TypeEnv = TE
   { -- | Bound variables and their types (ex. x : IntTy)
     getExpVars :: Map Variable Type,
@@ -73,6 +78,9 @@ instance Semigroup TypeEnv where
 (|:) :: TypeEnv -> (Variable, Type) -> TypeEnv
 (TE es as) |: (x, t) = TE (Map.insert x t es) as
 
+-- | Constraints
+-- ===============================
+
 -- | Equality constraints generated during type inference
 -- and solved afterwards via unification
 data Constraint = Equal Type Type
@@ -94,7 +102,7 @@ I thought it was important enough to give it its own section.
 
 The `TcMonad` is where we do all of our type checking. Importantly,
 it lets us read and write to the `TcState`, which we use to generate
-fresh type and instantiation variables.
+freshUV type and instantiation variables.
 
 It wraps this state in a `Writer` transformer to allow type
 inference to generate a list of constraints which are solved
@@ -106,7 +114,12 @@ subsequently.
 data TcState = TS UniVariable InstVariable
   deriving (Show, Eq)
 
-data TcRes = TR [Constraint] (Map UniVariable (Set TypeVariable))
+-- | Remembers what type variables a unification variable is
+-- allowed to unify to
+type UVarBounds = Map UniVariable (Set TypeVariable)
+
+-- | Datatype written by TcMonad
+data TcRes = TR [Constraint] UVarBounds
   deriving (Show, Eq)
 
 instance Monoid TcRes where
@@ -115,7 +128,8 @@ instance Monoid TcRes where
 instance Semigroup TcRes where
   (TR cs1 m1) <> (TR cs2 m2) = TR (cs1 <> cs2) (Map.unionWith (<>) m1 m2)
 
-type TcMonad' =
+-- | Monad where all type checking takes place
+type TcMonad a =
   WriterT
     -- gathered constraints
     TcRes
@@ -126,13 +140,7 @@ type TcMonad' =
         -- error messages (for unbound variables)
         (Either String)
     )
-
--- | Monad where all type checking takes place
-type TcMonad a = TcMonad' a
-
--- | Monad where type instantiation takes place
--- wraps TcMonad
--- type InstMonad a = StateT InstVariable TcMonad' a
+    a
 
 {-
 ==================================================================
@@ -140,19 +148,24 @@ type TcMonad a = TcMonad' a
 ==================================================================
 
 In this section, we define a 'Subst' type class parametrized by
-the type of thing being substituted for. In our case, we
-have two instances: for InstVariable and TypeVariable.
+the type of thing being substituted for. In our case, we have
+three instances: for InstVariable, UniVariable, and TypeVariable.
 
 InstVariables are used purely in the 'instantiate' judgement and
 can be instantiated for polytypes.
 
-TypeVariables are used in the final constraint based unification
-step and can be instantiated only with monotypes.
+UniVariables can are generated outside of instantiation and are
+unified in the constraints solving step after bidirectional
+type checking.
+
+TypeVariables are actual user level type variables bound by
+`forall`s.
 
 We also define a useful helper method 'substInstForUni' which
 takes a list of Instantiation variables and creates a substitution
-replacing those instantiation variables with (fresh) unification
-vars.
+replacing those instantiation variables with (freshUV) unification
+vars. This is to prevent instantiation variables from escaping
+their scope.
 -}
 type Substitution a = Map a Type
 
@@ -178,26 +191,24 @@ class (Ord a, Show a) => Subst a where
   -- | Create substitution assigning variable to a type
   -- // TODO: probably wanna separate these out cause currently relying on them being far apart
   varAsgn :: MonadError [Char] m => Char -> Type -> m (Substitution a)
-  varAsgn b t
-    | t == UVarTy (UV b) = return emptySubst
-    | t == IVarTy (IV b) = return emptySubst
-    | UV b `Set.member` freeV t =
-      throwError $
-        "occur check fails: " ++ show b ++ " in " ++ show t
-    | IV b `Set.member` freeV t =
-      throwError $
-        "occur check fails: " ++ show b ++ " in " ++ show t
-    | otherwise = return $ singSubst (wrap b) t
+
+-- varAsgn b t
+--   | t == UVarTy (UV b) = return emptySubst
+--   | t == IVarTy (IV b) = return emptySubst
+--   | UV b `Set.member` freeV t =
+--     throwError $
+--       "occur check fails: " ++ show b ++ " in " ++ show t
+--   | IV b `Set.member` freeV t =
+--     throwError $
+--       "occur check fails: " ++ show b ++ " in " ++ show t
+--   | otherwise = return $ singSubst (wrap b) t
 
 -- | Helper function to perform a substitution on a typing environment
 substEnv :: Subst a => Substitution a -> TypeEnv -> TypeEnv
 substEnv s (TE env as) = TE (Map.map (subst s) env) as
 
--- subst ::
-
--- // TODO: try to combien the two subst definitions cause they're so similar
+-- // TODO: do subst in terms of foldTy
 instance Subst InstVariable where
-  -- data Substitution InstVariable = SI (Map InstVariable Type) deriving (Show, Eq)
   wrap = IV
 
   subst m t@(IVarTy a) = fromMaybe t (Map.lookup a m)
@@ -210,10 +221,16 @@ instance Subst InstVariable where
 
   freeV = fiv
 
+  varAsgn b t
+    | t == IVarTy (IV b) = return emptySubst
+    | IV b `Set.member` freeV t =
+      throwError $
+        "occur check fails: " ++ show b ++ " in " ++ show t
+    | otherwise = return $ singSubst (wrap b) t
+
 -- do s1 on s2, then union
 
 instance Subst UniVariable where
-  -- data Substitution TypeVariable = SU (Map TypeVariable Type) deriving (Show, Eq)
   wrap = UV
 
   subst m t@(UVarTy a) = fromMaybe t (Map.lookup a m)
@@ -227,6 +244,13 @@ instance Subst UniVariable where
   subst _ t = t
 
   freeV = fuv
+
+  varAsgn b t
+    | t == UVarTy (UV b) = return emptySubst
+    | UV b `Set.member` freeV t =
+      throwError $
+        "occur check fails: " ++ show b ++ " in " ++ show t
+    | otherwise = return $ singSubst (wrap b) t
 
 instance Subst TypeVariable where
   -- data Substitution TypeVariable = SU (Map TypeVariable Type) deriving (Show, Eq)
@@ -243,14 +267,24 @@ instance Subst TypeVariable where
   subst _ t = t
 
   freeV = ftv
+  varAsgn = error "Type variables should never be assigned"
 
--- | substitute out all instantiation variables for fresh unification (type) variables
+-- | substitute out all instantiation variables for freshUV unification variables
 substInstToUni :: Foldable f => f InstVariable -> TcMonad (Substitution InstVariable)
 substInstToUni =
   foldM
     ( \acc x -> do
-        a <- fresh
+        a <- freshUV
         return (Map.insert x (UVarTy a) acc)
+    )
+    emptySubst
+
+substUniToType :: Foldable f => f UniVariable -> Substitution UniVariable
+substUniToType =
+  foldr
+    ( \x@(UV v) acc ->
+        let a = toLower v
+         in Map.insert x (VarTy a) acc
     )
     emptySubst
 
@@ -260,31 +294,29 @@ substInstToUni =
 ==================================================================
 
 We work with three different kinds of variables: term level
-'Variable', unification 'TypeVariable', and instantiation
-'InstVariable'.
+'Variable', type level 'TypeVariable', unification 'UniVariable',
+and instantiation 'InstVariable'.
 
 In this section, we define some useful methods for working with
 these variables.
 -}
 
--- | Generates a fresh type variable
-fresh :: TcMonad UniVariable
-fresh = do
+-- fresh :: TcMonad TypeVariable
+-- fresh = do
+
+-- | Generates a freshUV uni variable
+freshUV :: TcMonad UniVariable
+freshUV = do
   TS uv@(UV s) iv <- get
   put $ TS (UV $ succ s) iv
   return uv
 
+-- | Generates a freshUV inst variable
 freshIV :: TcMonad InstVariable
 freshIV = do
   TS tv iv@(IV s) <- get
   put $ TS tv (IV (succ s))
   return iv
-
--- do
--- -- // TODO: combine with fresh
--- (IV s) <- get
--- put $ IV (succ s)
--- return (IV s)
 
 -- | Looks up a variable in a context
 tLookup :: MonadError String m => Variable -> Map Variable a -> m a
@@ -326,6 +358,7 @@ fuv = foldTy fvFolder
     --    in return $ res `Set.difference` Set.fromList vs
     fvFolder _ = Nothing
 
+-- | Looks for free type variables in a type
 ftv :: Type -> Set TypeVariable
 ftv = foldTy fvFolder
   where
@@ -340,8 +373,7 @@ ftv = foldTy fvFolder
                         Type Checking
 ==================================================================
 
-Alright, we're ready to get into the real tofu of all this. The
-bidirectional type inference system is composed of two
+The bidirectional type inference system is composed of two
 judgements: 'checkType' and 'inferType'.
 
 'checkType' is used to push information "down" from what we already
@@ -352,13 +384,13 @@ You'll notice that in the 'App' cases, we use an 'instantiate'
 judgement. This judgement takes in a head type and a list of
 expressions applied to the head, and returns (if successful)
 a result type and a list of types for the expressions. Details
-to come in the next section
+to come in the next section.
 -}
 
 inferType :: TypeEnv -> Expression -> TcMonad Type
 -- LAMBDA
 inferType env (Lam x e) = do
-  argTy <- UVarTy <$> fresh
+  argTy <- UVarTy <$> freshUV
   resTy <- inferType (env |: (x, argTy)) e
   return (FunTy argTy resTy)
 -- APP
@@ -370,18 +402,30 @@ inferType env (App h es) = do
   -- generate a substitution to get rid of instantiation vars
   let together = resTy : argTys
   sub <- substInstToUni (fivs together)
+  -- throwError (display resTy)
   -- generate the requisite constraints for the argument types
   forM_ (zip es argTys) (\(e, t) -> checkType env e (subst sub t))
   return $ subst sub resTy
 
 -- from application head type inference judgement
-inferType env (Var v) = tLookup v (getExpVars env)
-inferType env (Annot e t) = do
-  checkType env e t
-  return t
+inferType env (Var v) = tLookup v (getExpVars env) -- NOTE: got rid of instantiation cause we sometimes don't want that (i.e. App head)
+-- ty <-
+-- -- instantiate with new variables (to support generalization)
+-- -- instUV ty
+-- return ty
+inferType env (Annot e t) =
+  let rest = checkType env e t
+   in do
+        guard (null (ftv t))
+        ((), constraints@(TR cs _)) <- listen rest
+        -- if throwError $ show (map display cs)
+        case solve constraints of
+          Left err -> do
+            -- throwError $ "ERROR: " <> show (map display cs)
+            throwError err
+          Right _ -> return t
+-- ensure no free variables
 inferType _ (C (DC _ ty)) = return ty -- // TODO: check if ty is actually a type
--- // TODO: all other types of types
-
 -- PRIMITIVES
 inferType _ (IntExp _) = return IntTy
 inferType _ (BoolExp _) = return BoolTy
@@ -403,41 +447,39 @@ inferType env (Case e pes) = do
     mapM
       ( \(pat, exp) -> do
           newEnv <- instantiateCase env [ty] [pat]
-          inferType newEnv exp
+          inferType newEnv (App exp [])
       )
       pes
-  -- fresh type variable
-  alpha <- UVarTy <$> fresh
+  -- freshUV type variable
+  alpha <- UVarTy <$> freshUV
+  -- throwError (show alpha)
   -- make sure every type is equal
   mapM_ (equate alpha) tys
   return alpha
--- foldM
---   ( \ty1 ty2 ->
---       evalStateT
---         ( do
---             ity1 <- inst ty1
---             ity2 <- inst ty2
---             -- // TODO: skolemize
---             sub <- lift $ mguQL ity1 ity2
---             let sty1 = subst sub ity1
---                 sty2 = subst sub ity2
---             equate sty1 sty2
---             return sty2
---         )
---         (IV 'K')
---   )
---   (head tys) -- UNSAFE
---   tys
+inferType env (If e1 e2 e3) = do
+  -- make sure argument is a bool
+  checkType env e1 BoolTy
+  -- infer e2 and e3 and equate them
+  ty1 <- inferType env e2
+  ty2 <- inferType env e3
+  a <- UVarTy <$> freshUV
+  equate ty1 a
+  equate ty2 a
+  return a
+-- LET GENERALIZATION
 inferType env (Let x e1 e2) = do
-  tv <- fresh
-  let xTy = UVarTy tv
-  resTy <- generalize env $ inferType (env |: (x, xTy)) e1
+  tv <- UVarTy <$> freshUV
+  resTy <- generalize env $ inferType (env |: (x, tv)) e1
+  -- throwError (show resTy)
   let innerTy = case resTy of
         Forall vs ty -> ty
         ty -> ty
-  equate innerTy xTy
+  equate innerTy tv
   inferType (env |: (x, resTy)) e2
 inferType _ _ = error "Unimplemented"
+
+fuvCtx :: Map Variable Type -> Set UniVariable
+fuvCtx = foldr (\x acc -> acc `Set.union` fuv x) mempty
 
 -- | 'checktype env e ty' succeeds if e can be checked to to have
 -- type ty and fails otherwise. It also generates necessary
@@ -445,19 +487,17 @@ inferType _ _ = error "Unimplemented"
 checkType :: TypeEnv -> Expression -> Type -> TcMonad ()
 -- GEN
 checkType (TE es as) e (Forall vs t) =
+  -- check type with foralls removed
   let checked = checkType newEnv e t
    in do
-        -- ensure that
-        -- // TODO: and ensure constraints don't escape their scope
-        -- checktype
+        -- extract constraints
         ((), TR constraints bs) <- listen checked
         -- find unification variables of c
         let fuvC = fuvConstraints constraints
             fuvTy = fuv t
-            fuvEnv = fuvCtx es
+            fuvEnv = mempty -- fuvCtx es // TODO: make this ACTUALLY WORK
             alphas = fuvC `Set.difference` (fuvTy `Set.union` fuvEnv)
-        -- throwError (show es)
-        -- throwError $ show fuvC <> " " <> show fuvTy <> " " <> show fuvEnv
+        -- throwError $ show fuvC <> "   " <> show fuvTy <> "   " <> show es
         let -- for each unification variable, add the quantified type variables to bounds
             newBs = foldr (\a acc -> Map.insert a (Set.fromList vs) acc) mempty alphas
         tell (TR constraints (bs <> newBs))
@@ -467,23 +507,21 @@ checkType (TE es as) e (Forall vs t) =
     fuvConstraints :: [Constraint] -> Set UniVariable
     fuvConstraints = foldr (\(Equal t1 t2) acc -> acc `Set.union` fuv t1 `Set.union` fuv t2) mempty
 
-    fuvCtx :: Map Variable Type -> Set UniVariable
-    fuvCtx = foldr (\x acc -> acc `Set.union` fuv x) mempty
 -- LAMBDA CASES
 checkType (TE es as) (Lam x e) (FunTy s1 s2) = checkType newEnv e s2
   where
     -- add the argument to the context
     newEnv = TE (Map.insert x s1 es) as
-checkType env (Lam x e) t@(VarTy _) = do
-  -- generate fresh type variables for the argument and return types
-  argTy <- fresh
-  resTy <- fresh
+checkType env (Lam x e) t@(UVarTy _) = do
+  -- generate freshUV type variables for the argument and return types
+  argTy <- freshUV
+  resTy <- freshUV
   -- t ~ argTy -> resTy
   equate t (FunTy (UVarTy argTy) (UVarTy resTy))
   -- do the usual lambda check
   let newEnv = env |: (x, UVarTy argTy)
   checkType newEnv e (UVarTy resTy)
-checkType _ e@(Lam _ _) ty = throwError $ "Invalid type for lambda at: " <> display e <> " TYPE: " <> show ty -- // TODO: replace with pretty print
+checkType _ e@(Lam _ _) ty = throwError $ "Invalid type for lambda at: " <> display e <> " TYPE: " <> display ty
 -- APP
 checkType env (App h es) ty = do
   -- infer type of head
@@ -529,12 +567,26 @@ checkType env (Case e pes) retTy = do
   mapM_
     ( \(pat, exp) -> do
         newEnv <- instantiateCase env [ty] [pat]
-        checkType newEnv exp retTy
+        checkType newEnv (App exp []) retTy -- surround by App so that foralls are instantiated
     )
     pes
+checkType env (If e1 e2 e3) resTy = do
+  -- make sure argument is a bool
+  checkType env e1 BoolTy
+  -- check that e2 and e3 have the right types
+  checkType env e2 resTy
+  checkType env e3 resTy
 checkType env e@(Annot _ _) ty' = checkType env (App e []) ty'
 checkType env e@(Var _) ty' = checkType env (App e []) ty'
--- // TODO: all other cases
+checkType env (Let x e1 e2) ty = do
+  tv <- UVarTy <$> freshUV
+  resTy <- generalize env $ inferType (env |: (x, tv)) e1
+  -- throwError (show resTy)
+  let innerTy = case resTy of
+        Forall vs ty -> ty
+        ty -> ty
+  equate innerTy tv
+  checkType (env |: (x, resTy)) e2 ty
 checkType env e ty = throwError $ "Fail checkType: " <> show env <> " EXP: " <> show e <> " TYPE: " <> show ty
 
 {-
@@ -554,9 +606,9 @@ Cases:
           the expression, 'qlArgument' will use that to generate
           a substitution
   - IVAR: 1) if the type is a unification variable, then generate
-          fresh unification variables and continue with those
+          freshUV unification variables and continue with those
           2) if the type is an instantiation variable, then
-          generate fresh instantiation variables and a
+          generate freshUV instantiation variables and a
           substitution replacing with the new vars
 
 The 'IARG' case mentions a "quick look" judgement. The purpose
@@ -577,7 +629,7 @@ instantiate env sTy es = do
 instantiateAux :: TypeEnv -> Type -> [Expression] -> TcMonad (Substitution InstVariable, [Type], Type)
 -- IALL - generate instantiation variable
 instantiateAux env (Forall (v : vs) ty) es = do
-  -- generate fresh variables and substitution
+  -- generate freshUV variables and substitution
   iv <- freshIV
   let sub = Map.singleton v (IVarTy iv)
   instantiateAux env (subst sub (Forall vs ty)) es
@@ -593,18 +645,19 @@ instantiateAux env (FunTy st1 st2) (e : es) = do
   -- substitute in the first argument
   return (sub, subst sub st1 : argTys, resTy)
 -- unification variable case
-instantiateAux env (VarTy v) (e : es) = do
-  -- generate fresh variables for argument and return types
-  argTV <- fresh
-  resTV <- fresh
+instantiateAux env (UVarTy v) (e : es) = do
+  -- generate freshUV variables for argument and return types
+  argTV <- freshUV
+  resTV <- freshUV
   -- v ~ argTV -> resTV
   let newType = FunTy (UVarTy argTV) (UVarTy resTV)
-  equate (VarTy v) newType
+  -- throwError ("DhfpOIUDFH")
+  equate (UVarTy v) newType
   -- check with new type
   instantiateAux env newType (e : es)
 -- instantiation variable case
 instantiateAux env (IVarTy v) (e : es) = do
-  -- generate fresh instantiation vars
+  -- generate freshUV instantiation vars
   argTV <- freshIV
   resTV <- freshIV
   -- argTV -> resTV
@@ -660,20 +713,26 @@ instantiateCase env (ty : tys) (VarP x : xs) = do
   resEnv <- instantiateCase env tys xs
   return $ resEnv |: (x, ty)
 instantiateCase env (ty : tys) (P (DC _ cTy) ps : xs) = do
-  -- -- get type of constructor
-  cTy <- inst cTy
+  -- instantiate constructor type with Unification Variables
+  cTy <- instUV cTy
+  -- convert to a list of types
   let tys' = typeToList cTy
-  -- throwError ("instCase: " <> show tys')
+  -- split it into the argument types and return type
   (tys'', retTy) <- splitLast tys'
-  -- unify data constructor return type and actual type
-  sub <- mguQL env retTy ty
-  -- throwError $ "infer case tys: " <> show retTy <> " " <> show ty
-  -- perform substitution on remaining stuff
-  let tys3 = map (subst sub) tys''
+  -- ensure that the return type is the type we're looking for
+  equate retTy ty
   -- check this constructor
-  env1 <- instantiateCase env tys3 ps
+  env1 <- instantiateCase env tys'' ps
+  -- check the rest
   env2 <- instantiateCase env tys xs
   return (env <> env1 <> env2)
+-- instantiateCase _ (IntTy : tys) (IntP i : xs) = return emptyEnv
+instantiateCase _ (ty : tys) (IntP i : xs) = do
+  equate ty IntTy
+  return emptyEnv
+instantiateCase _ (ty : tys) (BoolP b : xs) = do
+  equate ty BoolTy
+  return emptyEnv
 instantiateCase env [] [] = return env
 instantiateCase _ tys ps = throwError $ "Fail instantiateCase: " <> show tys <> " " <> show ps
 
@@ -685,14 +744,7 @@ splitLast (x : xs) = do
   (front, tail) <- splitLast xs
   return (x : front, tail)
 
--- | Generates something in the form of a -> a -> .... -> a
-genUniformFun :: MonadError [Char] m => TypeVariable -> Nat -> m Type
-genUniformFun _ Z = throwError "No good"
-genUniformFun v (S Z) = return $ VarTy v
-genUniformFun v (S n) = FunTy (VarTy v) <$> genUniformFun v n
-
---     undefined
-
+-- | Converts a function type to a list of types from between the arrows
 typeToList :: Type -> [Type]
 typeToList = foldTy tTLFolder
   where
@@ -708,7 +760,15 @@ inst (Forall (v : vs) ty) = do
 inst (Forall [] ty) = return ty
 inst ty = return ty
 
--- return undefined
+-- | instantiate a Forall type with unification cariables
+instUV :: Type -> TcMonad Type
+instUV (Forall (v : vs) ty) = do
+  uv <- freshUV
+  let sub = Map.singleton v (UVarTy uv)
+  instUV (subst sub (Forall vs ty))
+instUV (Forall [] ty) = return ty
+instUV ty = return ty
+
 {-
 ==================================================================
                   Putting things together
@@ -716,8 +776,7 @@ inst ty = return ty
 
 -}
 
--- | finds the most general unifier for poly types
--- mguQL :: Type -> Type -> TcMonad (Substitution InstVariable)
+-- | Finds the most general unifier for poly types
 mguQL :: TypeEnv -> Type -> Type -> TcMonad (Substitution InstVariable)
 -- ensure that types are in scope
 mguQL (TE _ env) ty@(VarTy a) (IVarTy (IV v))
@@ -770,8 +829,6 @@ mguQL (TE es tVars) (Forall vs1 ty1) (Forall vs2 ty2) =
 -- mguQL BoolTy BoolTy = return emptySubst
 mguQL _ _ _ = return emptySubst
 
--- mguQL t1 t2 = throwError $ "Types don't unify: " <> show t1 <> " " <> show t2
-
 -- | Performs most general unification on mono-types. Used after inferType
 mgu :: Type -> Type -> Either String (Substitution UniVariable)
 mgu IntTy IntTy = return emptySubst
@@ -780,6 +837,7 @@ mgu (FunTy l r) (FunTy l' r') = do
   s1 <- mgu l l'
   s2 <- mgu (subst s1 r) (subst s1 r')
   return $ s2 `after` s1
+mgu (UVarTy (UV a)) (UVarTy (UV b)) | a == b = return emptySubst
 mgu (UVarTy (UV a)) t = varAsgn a t -- // TODO: do we need to inforce mono here?
 mgu t (UVarTy (UV a)) = varAsgn a t
 mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
@@ -793,9 +851,46 @@ mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
         emptySubst
         (zipWith (,) vec1 vec2)
     Nothing -> throwError "type constructors are different; don't unify"
-mgu (Forall xs ty1) (Forall ys ty2)
+mgu (Forall xs ty1) (Forall ys ty2) -- // TODO: make this workkkk
   | length xs == length ys = mgu ty1 ty2
+-- VarTy checks defered until alphaEquiv
+mgu (VarTy x) (VarTy y) = return mempty
 mgu ty1 ty2 = throwError $ "types don't unify " <> show ty1 <> " " <> show ty2
+
+-- check if a type with ONLY TYPE VARIABLES is alpha equivalent
+alphaEquiv :: Type -> Type -> Either String ()
+alphaEquiv t1 t2 = do
+  alphaEquivAux t1 t2
+  return ()
+
+alphaEquivAux :: (MonadError String m) => Type -> Type -> m (Substitution TypeVariable)
+-- create a substitution when encountering two variables
+alphaEquivAux (VarTy x) (VarTy y) = return $ singSubst x (VarTy y)
+-- for foralls, ensure they have the same length, and then just continue
+alphaEquivAux (Forall xs ty1) (Forall ys ty2)
+  | length xs == length ys = alphaEquivAux ty1 ty2
+-- for primitives, just empty subst
+alphaEquivAux IntTy IntTy = return emptySubst
+alphaEquivAux BoolTy BoolTy = return emptySubst
+-- same for equal unification variables
+alphaEquivAux (UVarTy a) (UVarTy b) | a == b = return emptySubst
+-- for type constructors, recurse
+alphaEquivAux (FunTy l r) (FunTy l' r') = do
+  s1 <- alphaEquivAux l l'
+  s2 <- alphaEquivAux (subst s1 r) (subst s1 r')
+  return (s2 `after` s1)
+alphaEquivAux (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
+  case tc1 `testEquality` tc2 of
+    Just Refl ->
+      foldM
+        ( \acc (ty1, ty2) -> do
+            sbst <- alphaEquivAux ty1 ty2
+            return (sbst `after` acc)
+        )
+        emptySubst
+        (zipWith (,) vec1 vec2)
+    Nothing -> throwError "type constructors aren't alpha equiv"
+alphaEquivAux ty1 ty2 = throwError $ "types aren't alpha equiv " <> display ty1 <> " " <> display ty2
 
 -- | Calls inferTy to generate a type and the constraints
 genConstraints :: TypeEnv -> Expression -> Either String (Type, TcRes)
@@ -803,18 +898,24 @@ genConstraints env = runTc . inferType env
 
 -- | Solve a list of constraints. Used after inferType
 solve :: TcRes -> Either String (Substitution UniVariable)
-solve tr@(TR cs bs) = do
-  sub <-
-    foldM
-      ( \s1 (Equal t1 t2) -> do
-          s2 <- mgu (subst s1 t1) (subst s1 t2)
-          return (s2 `after` s1)
-      )
-      emptySubst
-      cs
-  if isSubstValid sub bs
-    then return sub
-    else throwError $ "constraint solving failed " <> show tr
+solve tr@(TR cs bs) =
+  foldM
+    ( \s1 (Equal t1 t2) -> do
+        -- catchError (mgu (subst s1 t1) (subst s1 t2)) (\e -> throwError $ "Mgu: " <> display t1 <> " " <> display t2)
+        s2 <- mgu (subst s1 t1) (subst s1 t2)
+        -- check alpha equivalence
+        let s' = s2 `after` s1
+        alphaEquiv (subst s' t1) (subst s' t2)
+        -- catchError (alphaEquiv (subst s' t1) (subst s' t2)) (\e -> throwError $ "Alpha: " <> display t1 <> " " <> display t2)
+        return (s2 `after` s1)
+    )
+    emptySubst
+    cs
+
+-- return sub -- // TODO: check bounds
+-- if isSubstValid sub bs
+--   then return sub
+--   else throwError $ "constraint solving failed " <> show (fmap display sub) <> "   " <> show bs
 
 -- | AND monoid instance for Bool, used by `isTypeValid`
 instance Monoid Bool where
@@ -825,7 +926,7 @@ instance Semigroup Bool where -- AND
 
 -- | Checks to make sure unification variables are being unified
 -- to allowed type variables
-isSubstValid :: Substitution UniVariable -> Map UniVariable (Set TypeVariable) -> Bool
+isSubstValid :: Substitution UniVariable -> UVarBounds -> Bool
 isSubstValid s b = all (\(uv, ty) -> isTypeValid (getSet uv) ty) (Map.toAscList s)
   where
     getSet :: UniVariable -> Set TypeVariable
@@ -844,18 +945,28 @@ isTypeValid s = foldTy valFolder
 -- | Really puts everything together. Goes from an environment
 -- and expression to either a type of an error.
 typeInference :: TypeEnv -> Expression -> Either String Type
-typeInference env e = do
-  (ty, constraints) <- genConstraints env e
-  -- throwError $ display ty <> " CSTRS: " <> show constraints
-  -- throwError $ show constraints
-  s <- solve constraints
-  return (subst s ty)
+typeInference env e = fst <$> runTc (generalize env (inferType env e))
+
+-- (ty, constraints@(TR cs _)) <- genConstraints env e
+-- -- throwError $ "ERROR: " <> display ty <> " " <> show (map display cs)
+-- -- throwError $ display ty <> " CSTRS: " <> show constraints
+-- -- throwError $ show constraints
+-- s <- solve constraints
+-- (ty, res) <-
+
+putCstrts :: FilePath -> IO ()
+putCstrts fp = do
+  e <- parseFile fp
+  case genConstraints emptyEnv e of
+    Right (ty, constraints@(TR cs _)) ->
+      mapM_ (\c -> putStrLn (display c)) cs
+    Left _ -> return ()
 
 top :: FilePath -> IO ()
 top fp = do
   exp <- parseFile fp
   let res = typeInference emptyEnv exp
-  print res
+  print $ display <$> res
 
 exp =
   Let
@@ -893,18 +1004,29 @@ exp =
 
 -- | Used by Eval to filter ill-typed expressions
 isValid :: Expression -> Bool
-isValid = undefined
+isValid e = isRight (typeInference emptyEnv e)
 
 -- | Take a type, solve current constraints, and add Foralls for unbound variables
 generalize :: TypeEnv -> TcMonad Type -> TcMonad Type
 generalize env m = do
-  (ty, constraints) <- listen m
+  (ty, constraints@(TR cs _)) <- listen m
+  -- throwError (display ty)
+  -- throwError (show $ map display cs)
   case solve constraints of
-    Left err -> throwError err
+    Left err -> do
+      -- throwError $ "ERROR: " <> display ty <> " " <> show (map display cs)
+      throwError err
     Right s -> do
       let sty = subst s ty
-      let fvs = ftv sty `minus` getTypeVars (substEnv s env)
-      return (Forall (Set.toList fvs) sty)
+      -- let ftvs = ftv sty `minus` getTypeVars (substEnv s env)
+      let fuvs = fuv sty `minus` fuvCtx (getExpVars env)
+          tvs = map (\(UV v) -> toLower v) (Set.toList fuvs)
+          sub = substUniToType fuvs
+      -- throwError (display ty)
+      return $
+        if tvs == ""
+          then subst sub sty
+          else Forall tvs (subst sub sty)
 
 minus :: Ord a => Set a -> Set a -> Set a
 minus = Set.foldr Set.delete
@@ -1025,7 +1147,9 @@ exCase2' :: Expression
 exCase2' = App exCase1 [IntExp 1]
 
 runTc :: TcMonad a -> Either String (a, TcRes)
-runTc m = evalStateT (runWriterT m) (TS (UV 'A') (IV 'K'))
+runTc m = evalStateT (runWriterT m) (TS (UV alpha) (IV 'K'))
+  where
+    alpha = 'A'
 
 -- MISCELLANEOUS
 ex =
@@ -1059,3 +1183,60 @@ expr2 =
       )
       (UVarTy (UV 'A'))
   ]
+
+-- debugging stuff
+
+instance PP Constraint where
+  pp (Equal ty1 ty2) = pp ty1 <+> PP.char '~' <+> pp ty2
+
+exBadCool =
+  Let
+    "injl"
+    ( Annot
+        (Lam "x" (Lam "f" (Lam "g" (App (Var "f") [Var "x"]))))
+        (Forall "ab" (FunTy (VarTy 'a') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r'))))))
+    )
+    ( Let
+        "casee"
+        ( Annot
+            (Lam "s" (Lam "f" (Lam "g" (App (Var "s") [Var "f", Var "g"]))))
+            (Forall "abq" (FunTy (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))) (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q')))))
+        )
+        ( Let
+            "isTrue"
+            ( Annot
+                ( App
+                    ( Lam
+                        "s"
+                        (App (Var "casee") [Var "s", Lam "x" (Op Ge (Var "x") (IntExp 1))])
+                    )
+                    [Lam "b" (Var "b")]
+                )
+                (FunTy (FunTy (FunTy IntTy BoolTy) (FunTy (FunTy BoolTy BoolTy) BoolTy)) BoolTy)
+            )
+            (Let "exL" (Annot (App (Var "injl") [IntExp 1]) (Forall "r" (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r'))))) (App (Var "isTrue") [Var "exL"]))
+        )
+    )
+
+exGoodCool =
+  Let
+    "injl"
+    ( Annot
+        (Lam "x" (Lam "f" (Lam "g" (App (Var "f") [Var "x"]))))
+        (Forall "ab" (FunTy (VarTy 'a') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r'))))))
+    )
+    ( Let
+        "casee"
+        ( Annot
+            (Lam "s" (Lam "f" (Lam "g" (App (Var "s") [Var "f", Var "g"]))))
+            (Forall "abq" (FunTy (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))) (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q')))))
+        )
+        ( Let
+            "isTrue"
+            ( Annot
+                (Lam "s" (App (Var "casee") [Var "s", Lam "x" (Op Ge (Var "x") (IntExp 1)), Lam "b" (Var "b")]))
+                (FunTy (FunTy (FunTy IntTy BoolTy) (FunTy (FunTy BoolTy BoolTy) BoolTy)) BoolTy)
+            )
+            (Let "exL" (Annot (App (Var "injl") [IntExp 1]) (Forall "r" (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r'))))) (App (Var "isTrue") [Var "exL"]))
+        )
+    )

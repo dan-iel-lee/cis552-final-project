@@ -1,0 +1,11 @@
+data List a = Nil | Cons a (List a)
+
+map = \f -> \l -> case l
+  | Nil -> Nil
+  | Cons x xs -> Cons (f x) (map f xs) ;
+
+li = Cons 1 (Cons 2 (Cons 3 (Cons 4 Nil))) ;
+
+suc = \x -> x + 1 ;
+
+map suc li

@@ -1,9 +1,6 @@
 injl :: forall a b . a -> (forall r . (a -> r) -> (b -> r) -> r)
 injl = \x -> \f -> \g -> f x ;
 
-injr :: forall a b . b -> (forall r . (a -> r) -> (b -> r) -> r)
-injr = \y -> \f -> \g -> g y ;
-
 
 casee :: forall a b q . ((a -> q) -> (b -> q) -> q) -> (a -> q) -> (b -> q) -> q
 casee = \s -> \f -> \g -> s f g ;

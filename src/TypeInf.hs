@@ -726,6 +726,13 @@ instantiateCase env (ty : tys) (P (DC _ cTy) ps : xs) = do
   -- check the rest
   env2 <- instantiateCase env tys xs
   return (env <> env1 <> env2)
+-- instantiateCase _ (IntTy : tys) (IntP i : xs) = return emptyEnv
+instantiateCase _ (ty : tys) (IntP i : xs) = do
+  equate ty IntTy
+  return emptyEnv
+instantiateCase _ (ty : tys) (BoolP b : xs) = do
+  equate ty BoolTy
+  return emptyEnv
 instantiateCase env [] [] = return env
 instantiateCase _ tys ps = throwError $ "Fail instantiateCase: " <> show tys <> " " <> show ps
 

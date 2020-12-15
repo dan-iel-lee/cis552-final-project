@@ -60,22 +60,22 @@ genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ [annotGen]
     -- reduce size
     n' = n `div` 2
     -- can always surround with annotation or find a variables
-    annotGen = (7, (`Annot` ty) <$> genExp ty ctx n')
+    annotGen = (1, (`Annot` ty) <$> genExp ty ctx n')
     varGen =
       -- find variables with the given type
       -- // TODO: also variables which can be instantiated to the given type
       let validVars = Map.filter (== ty) ctx
        in case Map.keys validVars of
             [] -> []
-            _ -> [(1, Var <$> arbVar validVars)]
+            _ -> [(7, Var <$> arbVar validVars)]
     -- Cases
     -- 1) n = 0
     -- if n = 0, only decrease the size of the type left to generate
     n0 = case ty of
-      IntTy -> [(1, IntExp <$> arbNat)]
-      BoolTy -> [(1, BoolExp <$> arbitrary)]
+      IntTy -> [(7, IntExp <$> arbNat)]
+      BoolTy -> [(7, BoolExp <$> arbitrary)]
       FunTy t1 t2 ->
-        [ ( 7,
+        [ ( 1,
             do
               x <- arbFreshVar ctx
               e <- genExp t2 (Map.insert x t1 ctx) n'
@@ -83,7 +83,7 @@ genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ [annotGen]
           )
         ]
       -- // NOTE: don't have to worry about type var scoping
-      Forall _ ty' -> [(7, genExp ty' ctx n)]
+      Forall _ ty' -> [(1, genExp ty' ctx n)]
       _ -> []
 
     -- 2) n > 0
@@ -93,12 +93,12 @@ genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ [annotGen]
 
     -- 2a) type specific cases (for ints and bools)
     ng0Specific = case ty of
-      IntTy -> [(7, intOpGen)]
-      BoolTy -> [(7, boolOpGen)]
+      IntTy -> [(1, intOpGen)]
+      BoolTy -> [(1, boolOpGen)]
       _ -> []
 
     -- 2b) in general, we can always surround by let, if, or app
-    ng0All = [(7, letGen), (7, appGen), (7, ifGen)]
+    ng0All = [(1, letGen), (1, appGen), (1, ifGen), (7, caseGen)]
     -- generate an operation which returns an Int
 
     intOpGen = do
@@ -150,7 +150,7 @@ genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ [annotGen]
       e1 <- genExp pTy ctx n'
 
       -- replicate an obscure number of patterns with a wildcard
-      let count = 0
+      let count = 1
       patterns <- replicateM count (patternExprGen pTy ty ctx)
 
       -- makes sure to add a variable wildcard so case never fails

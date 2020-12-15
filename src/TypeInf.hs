@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -24,6 +25,7 @@ Next up
 -}
 -- import Parser
 
+import Control.Applicative (Alternative)
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.State
@@ -868,46 +870,132 @@ mgu (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
         emptySubst
         (zipWith (,) vec1 vec2)
     Nothing -> throwError "type constructors are different; don't unify"
-mgu (Forall xs ty1) (Forall ys ty2) -- // TODO: make this workkkk
-  | length xs == length ys = mgu ty1 ty2
+mgu (Forall xs ty1) ty2 -- // TODO: make this workkkk
+{- length xs == length ys-}
+  =
+  mgu ty1 ty2
+mgu ty1 (Forall ys ty2) -- // TODO: make this workkkk
+{- length xs == length ys-}
+  =
+  mgu ty1 ty2
 -- VarTy checks defered until alphaEquiv
 mgu (VarTy x) (VarTy y) = return mempty
 mgu ty1 ty2 = throwError $ "types don't unify " <> show ty1 <> " " <> show ty2
 
+-- // TODO:
+
 -- check if a type with ONLY TYPE VARIABLES is alpha equivalent
 alphaEquiv :: Type -> Type -> Either String ()
 alphaEquiv t1 t2 = do
-  alphaEquivAux t1 t2
+  alphaAux t1 t2 (Map.empty, Map.empty)
   return ()
 
-alphaEquivAux :: (MonadError String m) => Type -> Type -> m (Substitution TypeVariable)
--- create a substitution when encountering two variables
-alphaEquivAux (VarTy x) (VarTy y) = return $ singSubst x (VarTy y)
--- for foralls, ensure they have the same length, and then just continue
-alphaEquivAux (Forall xs ty1) (Forall ys ty2)
-  | length xs == length ys = alphaEquivAux ty1 ty2
--- for primitives, just empty subst
-alphaEquivAux IntTy IntTy = return emptySubst
-alphaEquivAux BoolTy BoolTy = return emptySubst
+type AllowedSubsts = (Map TypeVariable (Set TypeVariable), Map TypeVariable (Set TypeVariable))
+
+type AlphaCstrts = [(TypeVariable, TypeVariable)]
+
+alphaAux :: MonadError String m => Type -> Type -> AllowedSubsts -> m AlphaCstrts
+alphaAux (VarTy x) (VarTy y) (m1, m2)
+  | y `Set.member` fromMaybe Set.empty (Map.lookup x m1)
+      && x `Set.member` fromMaybe Set.empty (Map.lookup y m2) =
+    return [(x, y)]
+alphaAux (Forall xs t1) (Forall ys t2) (m1, m2) =
+  let xsS = Set.fromList xs
+      ysS = Set.fromList ys
+
+      m1' = Map.fromList (map (,ysS) xs)
+      m2' = Map.fromList (map (,xsS) ys)
+      newM1 = m1' `Map.union` m1 -- left biased union
+      newM2 = m2' `Map.union` m2
+   in do
+        -- throwError $ (show newM1) <> (show newM2)
+        res <- alphaAux t1 t2 (newM1, newM2)
+        return $ removeFromSubst xsS ysS res
+alphaAux l@(Forall xs t1) r as = alphaAux l (Forall [] r) as
+alphaAux l r@(Forall ys t2) as = alphaAux (Forall [] l) r as
+alphaAux IntTy IntTy _ = return []
+alphaAux BoolTy BoolTy _ = return []
 -- same for equal unification variables
-alphaEquivAux (UVarTy a) (UVarTy b) | a == b = return emptySubst
--- for type constructors, recurse
-alphaEquivAux (FunTy l r) (FunTy l' r') = do
-  s1 <- alphaEquivAux l l'
-  s2 <- alphaEquivAux (subst s1 r) (subst s1 r')
-  return (s2 `after` s1)
-alphaEquivAux (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
+alphaAux (UVarTy a) (UVarTy b) _ | a == b = return []
+alphaAux (FunTy l r) (FunTy l' r') as = do
+  lres <- alphaAux l l' as
+  rres <- alphaAux r r' as
+  if doAlphasConflict lres rres
+    then throwError "types aren't alpha equiv"
+    else return (lres ++ rres)
+alphaAux (TyCstr tc1 vec1) (TyCstr tc2 vec2) as =
   case tc1 `testEquality` tc2 of
     Just Refl ->
       foldM
         ( \acc (ty1, ty2) -> do
-            sbst <- alphaEquivAux ty1 ty2
-            return (sbst `after` acc)
+            sbst <- alphaAux ty1 ty2 as
+            if doAlphasConflict sbst acc
+              then throwError "types aren't alpha equiv"
+              else return (sbst ++ acc)
         )
-        emptySubst
+        []
         (zipWith (,) vec1 vec2)
     Nothing -> throwError "type constructors aren't alpha equiv"
-alphaEquivAux ty1 ty2 = throwError $ "types aren't alpha equiv " <> display ty1 <> " " <> display ty2
+alphaAux ty1 ty2 _ = throwError $ "types aren't alpha equiv " <> display ty1 <> " " <> display ty2
+
+-- helper for alphaEquiv used in Forall case
+removeFromSubst :: Set TypeVariable -> Set TypeVariable -> AlphaCstrts -> AlphaCstrts
+removeFromSubst s1 s2 cs =
+  let f1 = filter p1 cs
+   in filter p2 f1
+  where
+    p2 (_, y) = y `Set.member` s2
+    p1 (x, _) = x `Set.member` s1
+
+doAlphasConflict :: AlphaCstrts -> AlphaCstrts -> Bool
+doAlphasConflict m1 m2 = not (null overlapL)
+  where
+    overlapL = do
+      (x, y) <- m1
+      (x', y') <- m2
+      let isConf = (x == x' && y /= y') || (x /= x' && y == y')
+      guard isConf
+      return ()
+
+-- alphaEquivAux :: (MonadError String m) => Type -> Type -> m (Substitution TypeVariable)
+-- -- create a substitution when encountering two variables
+-- alphaEquivAux (VarTy x) (VarTy y) = return $ singSubst x (VarTy y)
+-- -- for foralls, ensure they have the same length, and then just continue
+-- alphaEquivAux (Forall xs ty1) (Forall ys ty2) = do
+--   sub <- alphaEquivAux ty1 ty2
+--   return (removeFromSubst (Set.fromList xs) (Set.fromList ys) sub)
+-- alphaEquivAux (Forall xs ty1) ty2 = do
+--   sub <- alphaEquivAux ty1 ty2
+--   return (removeFromSubst (Set.fromList xs) Set.empty sub)
+-- alphaEquivAux ty1 (Forall ys ty2) = do
+--   sub <- alphaEquivAux ty1 ty2
+--   return (removeFromSubst Set.empty (Set.fromList ys) sub)
+-- -- for primitives, just empty subst
+-- alphaEquivAux IntTy IntTy = return emptySubst
+-- alphaEquivAux BoolTy BoolTy = return emptySubst
+-- -- same for equal unification variables
+-- alphaEquivAux (UVarTy a) (UVarTy b) | a == b = return emptySubst
+-- -- for type constructors, recurse
+-- alphaEquivAux (FunTy l r) (FunTy l' r') = do
+--   s1 <- alphaEquivAux l l'
+--   s2 <- alphaEquivAux (subst s1 r) (subst s1 r')
+--   if doSubstsConflict s1 s2
+--     then throwError "types aren't alpha equiv"
+--     else return (s2 `after` s1)
+-- alphaEquivAux (TyCstr tc1 vec1) (TyCstr tc2 vec2) =
+--   case tc1 `testEquality` tc2 of
+--     Just Refl ->
+--       foldM
+--         ( \acc (ty1, ty2) -> do
+--             sbst <- alphaEquivAux ty1 ty2
+--             if doSubstsConflict sbst acc
+--               then throwError "types aren't alpha equiv"
+--               else return (sbst `after` acc)
+--         )
+--         emptySubst
+--         (zipWith (,) vec1 vec2)
+--     Nothing -> throwError "type constructors aren't alpha equiv"
+-- alphaEquivAux ty1 ty2 = throwError $ "types aren't alpha equiv " <> display ty1 <> " " <> display ty2
 
 -- | Calls inferTy to generate a type and the constraints
 genConstraints :: TypeEnv -> Expression -> Either String (Type, TcRes)
@@ -922,8 +1010,12 @@ solve tr@(TR cs bs) =
         s2 <- mgu (subst s1 t1) (subst s1 t2)
         -- check alpha equivalence
         let s' = s2 `after` s1
-        alphaEquiv (subst s' t1) (subst s' t2)
-        -- catchError (alphaEquiv (subst s' t1) (subst s' t2)) (\e -> throwError $ "Alpha: " <> display t1 <> " " <> display t2)
+            t1' = subst s' t1
+            t2' = subst s' t2
+            t1'' = Forall (Set.toList $ ftv t1') t1'
+            t2'' = Forall (Set.toList $ ftv t1') t2'
+        -- catchError (alphaEquiv (subst s' t1) (subst s' t2)) (\_ -> throwError $ "Alpha " <> display t1 <> " " <> display t2)
+        catchError (alphaEquiv t1'' t2'') (\e -> throwError $ "Alpha: " <> show t1' <> " " <> show t2')
         return (s2 `after` s1)
     )
     emptySubst

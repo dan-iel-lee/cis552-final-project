@@ -2,6 +2,7 @@ module Generators where
 
 import Control.Monad.Except
 import Control.Monad.Fix
+import Data.Char as Char
 import Data.Either (isRight)
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -36,8 +37,8 @@ arbFreshVar :: GenCtx -> Gen Variable
 arbFreshVar ctx = elements $ Set.toList allowedS
   where
     bound = Set.fromList (Map.keys ctx)
-    total = Set.fromList $ (: []) <$> ['A' .. 'z']
-    allowedS = total `Set.difference` bound
+    total = Set.fromList $ (: []) <$> ['a' .. 'z']
+    allowedS = total -- `Set.difference` bound
 
 -- instance Enum String where
 --   toEnum n
@@ -55,7 +56,7 @@ genExp :: Type -> GenCtx -> Int -> Gen Expression
 -- // TODO: change to frequencies
 genExp ty ctx n = frequency $
   case n of
-    0 -> n0
+    0 -> if null n0 then [(1, return (IntExp 1))] else n0
     _ -> ng0 --n0 ++ ng0 ++ varGen ++ annotGen ++ appGenSmart
   where
     -- reduce size
@@ -65,25 +66,32 @@ genExp ty ctx n = frequency $
     varGen =
       -- find variables with the given type
       -- // TODO: also variables which can be instantiated to the given type
-      let validVars = Map.filter (== ty) ctx
+      let validVars = Map.filter (`canInst` ty) ctx
        in case Map.keys validVars of
             [] -> []
             _ -> [(7, Var <$> arbVar validVars)]
     -- generate an application based on what's in the context
     -- // TODO: generate ALL return types
     appGenSmart =
-      let splitCtx = fmap typeToList ctx
-          validCtx = Map.filter (\ts -> last ts == ty) splitCtx
-       in case Map.size validCtx of
+      let splitCtx = fmap typeSplits ctx
+          filtCtx = Map.map (filter (\ts -> last ts `canInst` ty)) splitCtx
+          validCtx = Map.filter (not . null) filtCtx
+          finalCtx = Map.map head validCtx
+       in case Map.size finalCtx of
             0 -> []
             _ ->
-              [ ( 1,
+              [ ( 3,
                   do
-                    (v, tys) <- elements (Map.toList validCtx)
+                    (v, tys) <- elements (Map.toList finalCtx)
                     args <- mapM (\ty -> genExp ty ctx n') (allButLast tys)
                     return (App (Var v) args)
                 )
               ]
+    -- check if a type can be instantiated to the correct type
+    canInst :: Type -> Type -> Bool
+    canInst t1 t2 = isRight $ do
+      (t1', _) <- runTc $ instUV t1
+      mgu t1' t2
     typeSplits :: Type -> [[Type]]
     typeSplits (FunTy l r) =
       [l, r] :
@@ -106,9 +114,9 @@ genExp ty ctx n = frequency $
         [ (10, funGen t1 t2)
         ]
       -- // NOTE: don't have to worry about type var scoping
-      Forall _ ty' -> [(10, genExp ty' ctx n)]
+      Forall _ ty' -> [(10, genExp ty' ctx n), (3, annotGen)]
       _ -> []
-    n0 = n0Specific ++ varGen ++ [(1, annotGen)]
+    n0 = n0Specific ++ varGen ++ appGenSmart
 
     funGen t1 t2 = do
       x <- arbFreshVar ctx
@@ -130,7 +138,7 @@ genExp ty ctx n = frequency $
       _ -> []
 
     -- 2b) in general, we can always surround by let, if, or app
-    ng0All = [(2, letGen), (1, appGen), (2, ifGen), (2, caseGen)]
+    ng0All = [(1, letGen), (1, appGen), (2, ifGen), (2, caseGen)]
     -- generate an operation which returns an Int
 
     intOpGen = do
@@ -149,7 +157,7 @@ genExp ty ctx n = frequency $
       -- get a fresh variable
       x <- arbFreshVar ctx
       -- generate a type for x
-      ty' <- sized (genTypePol Neg) -- (arbitrary :: Gen Type) -- // NOTE: at the moment can't access any bound type variables
+      ty' <- mTyGen -- (arbitrary :: Gen Type) -- // NOTE: at the moment can't access any bound type variables
       -- insert (x, ty') into the context
       let newCtx = Map.insert x ty' ctx
       -- generate the e1 in "x = e1"
@@ -192,11 +200,13 @@ genExp ty ctx n = frequency $
 
       return (Case e1 patterns')
 
+    mTyGen = resize n' (sized genTypeMono)
+
     appGen = do
       -- generate an arbitrary (small) natural number for argument count
       argCount <- (\n -> 1 + n `div` 5) <$> arbNat
       -- generate an arbitrary list of argument types
-      tys <- replicateM argCount (arbitrary :: Gen Type)
+      tys <- replicateM argCount mTyGen
       -- combine into one type for the head
       let headTy = foldr FunTy ty tys
       -- generate head (at 0 so that there's no nested Apps)
@@ -215,6 +225,18 @@ flip Neg = Pos
 
 -- // TODO: allow type variables
 --            this is tricky, need to know what variables we're allowed to use
+
+genTypeMono :: Int -> Gen Type
+genTypeMono n = frequency $ n0 ++ ng0
+  where
+    n' = n `div` 2
+    n0 = [(1, return IntTy), (1, return BoolTy)]
+    ng0 = case n of
+      0 -> []
+      _ ->
+        [ (4, FunTy <$> genTypeMono n' <*> genTypeMono n')
+        ]
+
 genType :: Int -> Gen Type
 genType = genTypePol Pos
 
@@ -253,8 +275,8 @@ genTypeAux env argctx p n = frequency $ n0 ++ ng0 ++ varGen
     ng0 = case n of
       0 -> []
       _ ->
-        [ (4, funGen) -- ,
-        -- (2, faGen)
+        [ (4, funGen),
+          (2, faGen)
         ]
     funGen = do
       -- generate an arg type with Positivity reversed
@@ -287,8 +309,8 @@ genTypeAux env argctx p n = frequency $ n0 ++ ng0 ++ varGen
 -- let x = x in x
 instance Arbitrary Expression where
   arbitrary = do
-    ty <- scale (`div` 3) arbitrary
-    sized (genExp ty Map.empty)
+    ty <- arbitrary
+    scale (`div` 3) $ sized (genExp ty Map.empty)
 
   shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]
   shrink (If e1 e2 e3) = [If e1' e2' e3' | e1' <- shrink e1, e2' <- shrink e2, e3' <- shrink e3]
@@ -300,5 +322,5 @@ instance Arbitrary Expression where
   shrink _ = []
 
 instance Arbitrary Type where
-  arbitrary = sized genType
+  arbitrary = scale (`div` 2) $ sized genType
   shrink _ = [] -- // TODO: how to shrink

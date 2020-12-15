@@ -53,12 +53,15 @@ genExp :: Type -> GenCtx -> Int -> Gen Expression
 -- genExp IntTy _ 0 = IntExp <$> arbNat
 -- genExp BoolTy _ 0 = BoolExp <$> arbitrary
 -- // TODO: change to frequencies
-genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ annotGen -- ++ appGenSmart
+genExp ty ctx n = frequency $
+  case n of
+    0 -> n0
+    _ -> ng0 --n0 ++ ng0 ++ varGen ++ annotGen ++ appGenSmart
   where
     -- reduce size
     n' = n `div` 2
     -- can always surround with annotation or find a variable
-    annotGen = [(0, (`Annot` ty) <$> genExp ty ctx n')]
+    annotGen = (`Annot` ty) <$> genExp ty ctx n'
     varGen =
       -- find variables with the given type
       -- // TODO: also variables which can be instantiated to the given type
@@ -67,52 +70,63 @@ genExp ty ctx n = frequency $ n0 ++ ng0 ++ varGen ++ annotGen -- ++ appGenSmart
             [] -> []
             _ -> [(7, Var <$> arbVar validVars)]
     -- generate an application based on what's in the context
+    -- // TODO: generate ALL return types
     appGenSmart =
       let splitCtx = fmap typeToList ctx
           validCtx = Map.filter (\ts -> last ts == ty) splitCtx
        in case Map.size validCtx of
             0 -> []
             _ ->
-              [ ( 2,
+              [ ( 1,
                   do
                     (v, tys) <- elements (Map.toList validCtx)
                     args <- mapM (\ty -> genExp ty ctx n') (allButLast tys)
                     return (App (Var v) args)
                 )
               ]
+    typeSplits :: Type -> [[Type]]
+    typeSplits (FunTy l r) =
+      [l, r] :
+      ( do
+          s <- typeSplits r
+          return (l : s)
+      )
+    typeSplits t = return [t]
     -- helper for appGenSmart
     allButLast :: [a] -> [a]
     allButLast [y] = []
     allButLast (x : xs) = x : allButLast xs
-    -- helper for var case
-    -- tryInst
     -- Cases
     -- 1) n = 0
     -- if n = 0, only decrease the size of the type left to generate
-    n0 = case ty of
-      IntTy -> [(2, IntExp <$> arbNat)]
-      BoolTy -> [(2, BoolExp <$> arbitrary)]
+    n0Specific = case ty of
+      IntTy -> [(10, IntExp <$> arbNat)]
+      BoolTy -> [(10, BoolExp <$> arbitrary)]
       FunTy t1 t2 ->
-        [ ( 1,
-            do
-              x <- arbFreshVar ctx
-              e <- genExp t2 (Map.insert x t1 ctx) n'
-              return (Lam x e)
-          )
+        [ (10, funGen t1 t2)
         ]
       -- // NOTE: don't have to worry about type var scoping
-      Forall _ ty' -> [(1, genExp ty' ctx n)]
+      Forall _ ty' -> [(10, genExp ty' ctx n)]
       _ -> []
+    n0 = n0Specific ++ varGen ++ [(1, annotGen)]
+
+    funGen t1 t2 = do
+      x <- arbFreshVar ctx
+      e <- genExp t2 (Map.insert x t1 ctx) n'
+      return (Lam x e)
 
     -- 2) n > 0
-    ng0 = case n of
-      0 -> []
-      _ -> ng0Specific ++ ng0All
+    ng0 = ng0Specific ++ ng0All ++ appGenSmart ++ varGen ++ [(1, annotGen)]
 
     -- 2a) type specific cases (for ints and bools)
     ng0Specific = case ty of
-      IntTy -> [(3, intOpGen)]
-      BoolTy -> [(3, boolOpGen)]
+      IntTy -> [(2, IntExp <$> arbNat), (3, intOpGen)]
+      BoolTy -> [(3, BoolExp <$> arbitrary), (3, boolOpGen)]
+      FunTy t1 t2 ->
+        [ (3, funGen t1 t2)
+        ]
+      -- // NOTE: don't have to worry about type var scoping
+      Forall _ ty' -> [(10, genExp ty' ctx n)]
       _ -> []
 
     -- 2b) in general, we can always surround by let, if, or app
@@ -273,7 +287,7 @@ genTypeAux env argctx p n = frequency $ n0 ++ ng0 ++ varGen
 -- let x = x in x
 instance Arbitrary Expression where
   arbitrary = do
-    ty <- arbitrary
+    ty <- scale (`div` 3) arbitrary
     sized (genExp ty Map.empty)
 
   shrink (Op o e1 e2) = [Op o e1' e2' | e1' <- shrink e1, e2' <- shrink e2]

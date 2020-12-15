@@ -9,10 +9,8 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Vec.Lazy (Vec (VNil))
-import Eval
-import Parser ()
 import Test.QuickCheck
-import TypeInf
+import TypeInf (instUV, mgu, runTc)
 import Types
 import Prelude hiding (flip)
 

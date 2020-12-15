@@ -27,7 +27,6 @@ source-repository head
 
 library
   exposed-modules:
-      Eval2
       Eval
       Lib
       Parser
@@ -35,7 +34,7 @@ library
       TypeInf
       TestInfEval
       Types
-      SimpleEval
+      Generators
   other-modules:
       Paths_project_cis552
   hs-source-dirs:

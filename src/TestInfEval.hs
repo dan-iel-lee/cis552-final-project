@@ -10,7 +10,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Vec.Lazy (Vec (VNil))
+import Data.Vec.Lazy (Vec (VNil, (:::)))
 import Eval
 import Generators
 import Parser
@@ -143,6 +143,15 @@ bad1 = Op Plus (IntExp 1) (BoolExp True)
 -- wrong shape
 bad2 = App (Lam "x" (Op Plus (var "x") (IntExp 1))) [IntExp 1, IntExp 2]
 
+-- Polymorphic cases (see files with the same names for original)
+-- I didn't include all of them here because it's kind of hard to say what the exact type
+-- of the polymorphic type will be (because of name differences)
+exCompose = Let "compose" (Annot (Lam "f" (Lam "g" (Lam "x" (App (Var "f") [App (Var "g") [Var "x"]])))) (Forall "abc" (FunTy (FunTy (VarTy 'b') (VarTy 'c')) (FunTy (FunTy (VarTy 'a') (VarTy 'b')) (FunTy (VarTy 'a') (VarTy 'c')))))) (Let "id" (Annot (Lam "x" (Var "x")) (Forall "a" (FunTy (VarTy 'a') (VarTy 'a')))) (Let "auto" (Annot (App (Var "id") [Var "id"]) (FunTy (Forall "a" (FunTy (VarTy 'a') (VarTy 'a'))) (Forall "b" (FunTy (VarTy 'b') (VarTy 'b'))))) (App (Var "compose") [Var "auto", Var "auto", Var "id", IntExp 1])))
+
+exRanked = Let "f" (Annot (Lam "x" (App (C (DC {getDCName = "Both", getType = Forall "ab" (FunTy (VarTy 'a') (FunTy (VarTy 'b') (TyCstr (TC "Both" (SS (SS SZ))) (VarTy 'a' ::: VarTy 'b' ::: VNil))))})) [App (Var "x") [IntExp 1], App (Var "x") [BoolExp True]])) (FunTy (Forall "a" (FunTy (VarTy 'a') (VarTy 'a'))) (TyCstr (TC "Both" (SS (SS SZ))) (IntTy ::: BoolTy ::: VNil)))) (App (Var "f") [Lam "x" (Var "x")])
+
+tyRanked = TyCstr (TC "Both" (SS (SS (SZ)))) (IntTy ::: BoolTy ::: VNil)
+
 testTypeInf =
   TestList
     [ -- good
@@ -153,7 +162,10 @@ testTypeInf =
       typeInference emptyEnv good5 ~?= Right (FunTy IntTy IntTy),
       -- bad
       isLeft (typeInference emptyEnv bad1) ~?= True,
-      isLeft (typeInference emptyEnv bad2) ~?= True
+      isLeft (typeInference emptyEnv bad2) ~?= True,
+      -- poly
+      typeInference emptyEnv exCompose ~?= Right IntTy,
+      typeInference emptyEnv exRanked ~?= Right tyRanked
     ]
 
 {-
@@ -216,8 +228,7 @@ tests = do
   _ <-
     runTestTT
       ( TestList
-          [testsFailing, testLet, testCasing, testIfs, testUserDefined, testFunctions]
+          [testsFailing, testLet, testCasing, testIfs, testUserDefined, testFunctions, testTypeInf]
       )
   quickCheck progress
   quickCheck preservation
-  return ()

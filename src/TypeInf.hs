@@ -75,6 +75,9 @@ instance Semigroup TypeEnv where
 data Constraint = Equal Type Type
   deriving (Show, Eq)
 
+instance PP Constraint where
+  pp (Equal ty1 ty2) = pp ty1 <+> PP.char '~' <+> pp ty2
+
 -- | Generates an equality constraint
 equate :: Type -> Type -> TcMonad ()
 equate t1 t2
@@ -881,6 +884,7 @@ alphaAux (Forall xs t1) (Forall ys t2) (m1, m2) =
    in do
         -- throwError $ (show newM1) <> (show newM2)
         res <- alphaAux t1 t2 (newM1, newM2)
+        -- throwError $ (display t1) <> (display t2) <> show xsS <> show ysS
         return $ removeFromSubst xsS ysS res
 alphaAux l@(Forall xs t1) r as = alphaAux l (Forall [] r) as
 alphaAux l r@(Forall ys t2) as = alphaAux (Forall [] l) r as
@@ -892,7 +896,7 @@ alphaAux (FunTy l r) (FunTy l' r') as = do
   lres <- alphaAux l l' as
   rres <- alphaAux r r' as
   if doAlphasConflict lres rres
-    then throwError "types aren't alpha equiv"
+    then throwError $ "types aren't alpha equiv1 " <> show lres <> " " <> show rres
     else return (lres ++ rres)
 alphaAux (TyCstr tc1 vec1) (TyCstr tc2 vec2) as =
   case tc1 `testEquality` tc2 of
@@ -901,7 +905,7 @@ alphaAux (TyCstr tc1 vec1) (TyCstr tc2 vec2) as =
         ( \acc (ty1, ty2) -> do
             sbst <- alphaAux ty1 ty2 as
             if doAlphasConflict sbst acc
-              then throwError "types aren't alpha equiv"
+              then throwError "types aren't alpha equiv2"
               else return (sbst ++ acc)
         )
         []
@@ -913,8 +917,8 @@ alphaAux ty1 ty2 _ = throwError $ "types aren't alpha equiv " <> display ty1 <> 
 -- constraints from escaping their scope
 removeFromSubst :: Set TypeVariable -> Set TypeVariable -> AlphaCstrts -> AlphaCstrts
 removeFromSubst s1 s2 cs =
-  let f1 = filter p1 cs
-   in filter p2 f1
+  let f1 = filter (not . p1) cs
+   in filter (not . p2) f1
   where
     p2 (_, y) = y `Set.member` s2
     p1 (x, _) = x `Set.member` s1
@@ -957,7 +961,7 @@ solve tr@(TR cs bs) =
             t1'' = Forall (Set.toList $ ftv t1') t1'
             t2'' = Forall (Set.toList $ ftv t1') t2'
         -- catchError (alphaEquiv (subst s' t1) (subst s' t2)) (\_ -> throwError $ "Alpha " <> display t1 <> " " <> display t2)
-        catchError (alphaEquiv t1'' t2'') (\e -> throwError $ "Alpha: " <> show t1' <> " " <> show t2')
+        catchError (alphaEquiv t1'' t2'') (\_ -> throwError $ "Alpha: " <> show t1' <> " " <> show t2')
         return (s2 `after` s1)
     )
     emptySubst
@@ -1052,161 +1056,158 @@ runTc m = evalStateT (runWriterT m) (TS (UV alpha) (IV 'K'))
 
 {-
 ==================================================================
-                  Test Cases and Examples
+          Test Cases and Examples (See `TestInfEval.hs`)
 ==================================================================
 -}
 
--- EXAMPLES AND FUN
-listTC :: TypeConstructor (S Z)
-listTC = TC "List" (SS SZ)
+-- -- EXAMPLES AND FUN
+-- listTC :: TypeConstructor (S Z)
+-- listTC = TC "List" (SS SZ)
 
-listTy :: TypeVariable -> Type
-listTy v = TyCstr listTC (VarTy v ::: VNil)
+-- listTy :: TypeVariable -> Type
+-- listTy v = TyCstr listTC (VarTy v ::: VNil)
 
-consTy :: Type
-consTy = Forall ['a'] (FunTy (VarTy 'a') (FunTy (listTy 'a') (listTy 'a')))
+-- consTy :: Type
+-- consTy = Forall ['a'] (FunTy (VarTy 'a') (FunTy (listTy 'a') (listTy 'a')))
 
-nilTy :: Type
-nilTy = Forall ['a'] (TyCstr listTC (VarTy 'a' ::: VNil))
+-- nilTy :: Type
+-- nilTy = Forall ['a'] (TyCstr listTC (VarTy 'a' ::: VNil))
 
-consDC :: DataConstructor
-consDC = DC "cons" consTy
+-- consDC :: DataConstructor
+-- consDC = DC "cons" consTy
 
-nilDC :: DataConstructor
-nilDC = DC "nil" nilTy
+-- nilDC :: DataConstructor
+-- nilDC = DC "nil" nilTy
 
-consExp :: Expression
-consExp = C consDC
+-- consExp :: Expression
+-- consExp = C consDC
 
-nilExp :: Expression
-nilExp = C nilDC
+-- nilExp :: Expression
+-- nilExp = C nilDC
 
-ex1 :: Expression
-ex1 = App consExp [IntExp 1, nilExp]
+-- ex1 :: Expression
+-- ex1 = App consExp [IntExp 1, nilExp]
 
--- polymorphism example (id : ids) -- WORKS!
-idTy :: Type
-idTy = Forall ['b'] (FunTy (VarTy 'b') (VarTy 'b'))
+-- -- polymorphism example (id : ids) -- WORKS!
+-- idTy :: Type
+-- idTy = Forall ['b'] (FunTy (VarTy 'b') (VarTy 'b'))
 
-idsTy :: Type
-idsTy = TyCstr listTC (idTy ::: VNil)
+-- idsTy :: Type
+-- idsTy = TyCstr listTC (idTy ::: VNil)
 
-idsCtx :: TypeEnv
-idsCtx = TE (Map.fromList [("id", idTy), ("ids", idsTy)]) Set.empty
+-- idsCtx :: TypeEnv
+-- idsCtx = TE (Map.fromList [("id", idTy), ("ids", idsTy)]) Set.empty
 
-ex2 :: Expression
--- id :: forall a. a -> a
--- ids :: [forall a. a -> a]
--- Cons id Nil :: (forall a [a -> a])
--- id : ids
--- Cons :: a -> List a -> List a
--- (forall a. a -> a) -> List (forall .....)
-ex2 = App consExp [var "id", var "ids"]
+-- ex2 :: Expression
+-- -- id :: forall a. a -> a
+-- -- ids :: [forall a. a -> a]
+-- -- Cons id Nil :: (forall a [a -> a])
+-- -- id : ids
+-- -- Cons :: a -> List a -> List a
+-- -- (forall a. a -> a) -> List (forall .....)
+-- ex2 = App consExp [var "id", var "ids"]
 
--- PATTERN MATCHING EXAMPLES
-{-
-case [1] of
-  nil -> \y -> 0
-  (x : xs) -> 1
--}
-exCase :: Expression
-exCase = Case ex1 [(P nilDC [], IntExp 0), (P consDC [VarP "x", VarP "xs"], IntExp 1)]
+-- -- PATTERN MATCHING EXAMPLES
+-- {-
+-- case [1] of
+--   nil -> \y -> 0
+--   (x : xs) -> 1
+-- -}
+-- exCase :: Expression
+-- exCase = Case ex1 [(P nilDC [], IntExp 0), (P consDC [VarP "x", VarP "xs"], IntExp 1)]
 
-exCase1 :: Expression
-exCase1 = Case ex1 [(P consDC [VarP "x", VarP "xs"], Var "x"), (P nilDC [], Lam "y" (Var "y"))]
+-- exCase1 :: Expression
+-- exCase1 = Case ex1 [(P consDC [VarP "x", VarP "xs"], Var "x"), (P nilDC [], Lam "y" (Var "y"))]
 
-exCase2 :: Expression
-exCase2 = Case ex2 [(P consDC [VarP "x", VarP "xs"], Var "x"), (P nilDC [], Lam "y" (Var "y"))]
+-- exCase2 :: Expression
+-- exCase2 = Case ex2 [(P consDC [VarP "x", VarP "xs"], Var "x"), (P nilDC [], Lam "y" (Var "y"))]
 
-exCase2' :: Expression
-exCase2' = App exCase1 [IntExp 1]
+-- exCase2' :: Expression
+-- exCase2' = App exCase1 [IntExp 1]
 
--- MISCELLANEOUS
-ex =
-  Let
-    "id"
-    ( Annot
-        (Lam "x" (Var "x"))
-        (Forall "a" (FunTy (VarTy 'a') (VarTy 'a')))
-    )
-    ( Let
-        "ids"
-        ( Annot
-            (App (C (DC {getDCName = "Cons", getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))})) [Var "id", C (DC {getDCName = "Nil", getType = Forall "a" (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))})])
-            (TyCstr (TC "List" (SS SZ)) (Forall "a" (FunTy (VarTy 'a') (VarTy 'a')) ::: VNil))
-        )
-        ( App
-            (C (DC {getDCName = "Cons", getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))}))
-            [Var "id", Var "ids"]
-        )
-    )
+-- -- MISCELLANEOUS
+-- ex =
+--   Let
+--     "id"
+--     ( Annot
+--         (Lam "x" (Var "x"))
+--         (Forall "a" (FunTy (VarTy 'a') (VarTy 'a')))
+--     )
+--     ( Let
+--         "ids"
+--         ( Annot
+--             (App (C (DC {getDCName = "Cons", getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))})) [Var "id", C (DC {getDCName = "Nil", getType = Forall "a" (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))})])
+--             (TyCstr (TC "List" (SS SZ)) (Forall "a" (FunTy (VarTy 'a') (VarTy 'a')) ::: VNil))
+--         )
+--         ( App
+--             (C (DC {getDCName = "Cons", getType = Forall "a" (FunTy (VarTy 'a') (FunTy (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil)) (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))))}))
+--             [Var "id", Var "ids"]
+--         )
+--     )
 
-expr2 :: [Constraint]
-expr2 =
-  [ Equal
-      ( Forall
-          "a"
-          ( FunTy
-              (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))
-              (TyCstr (TC "Maybe" (SS SZ)) (VarTy 'a' ::: VNil))
-          )
-      )
-      (UVarTy (UV 'A'))
-  ]
+-- expr2 :: [Constraint]
+-- expr2 =
+--   [ Equal
+--       ( Forall
+--           "a"
+--           ( FunTy
+--               (TyCstr (TC "List" (SS SZ)) (VarTy 'a' ::: VNil))
+--               (TyCstr (TC "Maybe" (SS SZ)) (VarTy 'a' ::: VNil))
+--           )
+--       )
+--       (UVarTy (UV 'A'))
+--   ]
 
 -- debugging stuff
 
-instance PP Constraint where
-  pp (Equal ty1 ty2) = pp ty1 <+> PP.char '~' <+> pp ty2
+-- exBadCool =
+--   Let
+--     "injl"
+--     ( Annot
+--         (Lam "x" (Lam "f" (Lam "g" (App (Var "f") [Var "x"]))))
+--         (Forall "ab" (FunTy (VarTy 'a') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r'))))))
+--     )
+--     ( Let
+--         "casee"
+--         ( Annot
+--             (Lam "s" (Lam "f" (Lam "g" (App (Var "s") [Var "f", Var "g"]))))
+--             (Forall "abq" (FunTy (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))) (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q')))))
+--         )
+--         ( Let
+--             "isTrue"
+--             ( Annot
+--                 ( App
+--                     ( Lam
+--                         "s"
+--                         (App (Var "casee") [Var "s", Lam "x" (Op Ge (Var "x") (IntExp 1))])
+--                     )
+--                     [Lam "b" (Var "b")]
+--                 )
+--                 (FunTy (FunTy (FunTy IntTy BoolTy) (FunTy (FunTy BoolTy BoolTy) BoolTy)) BoolTy)
+--             )
+--             (Let "exL" (Annot (App (Var "injl") [IntExp 1]) (Forall "r" (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r'))))) (App (Var "isTrue") [Var "exL"]))
+--         )
+--     )
 
-exBadCool =
-  Let
-    "injl"
-    ( Annot
-        (Lam "x" (Lam "f" (Lam "g" (App (Var "f") [Var "x"]))))
-        (Forall "ab" (FunTy (VarTy 'a') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r'))))))
-    )
-    ( Let
-        "casee"
-        ( Annot
-            (Lam "s" (Lam "f" (Lam "g" (App (Var "s") [Var "f", Var "g"]))))
-            (Forall "abq" (FunTy (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))) (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q')))))
-        )
-        ( Let
-            "isTrue"
-            ( Annot
-                ( App
-                    ( Lam
-                        "s"
-                        (App (Var "casee") [Var "s", Lam "x" (Op Ge (Var "x") (IntExp 1))])
-                    )
-                    [Lam "b" (Var "b")]
-                )
-                (FunTy (FunTy (FunTy IntTy BoolTy) (FunTy (FunTy BoolTy BoolTy) BoolTy)) BoolTy)
-            )
-            (Let "exL" (Annot (App (Var "injl") [IntExp 1]) (Forall "r" (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r'))))) (App (Var "isTrue") [Var "exL"]))
-        )
-    )
-
-exGoodCool =
-  Let
-    "injl"
-    ( Annot
-        (Lam "x" (Lam "f" (Lam "g" (App (Var "f") [Var "x"]))))
-        (Forall "ab" (FunTy (VarTy 'a') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r'))))))
-    )
-    ( Let
-        "casee"
-        ( Annot
-            (Lam "s" (Lam "f" (Lam "g" (App (Var "s") [Var "f", Var "g"]))))
-            (Forall "abq" (FunTy (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))) (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q')))))
-        )
-        ( Let
-            "isTrue"
-            ( Annot
-                (Lam "s" (App (Var "casee") [Var "s", Lam "x" (Op Ge (Var "x") (IntExp 1)), Lam "b" (Var "b")]))
-                (FunTy (FunTy (FunTy IntTy BoolTy) (FunTy (FunTy BoolTy BoolTy) BoolTy)) BoolTy)
-            )
-            (Let "exL" (Annot (App (Var "injl") [IntExp 1]) (Forall "r" (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r'))))) (App (Var "isTrue") [Var "exL"]))
-        )
-    )
+-- exGoodCool =
+--   Let
+--     "injl"
+--     ( Annot
+--         (Lam "x" (Lam "f" (Lam "g" (App (Var "f") [Var "x"]))))
+--         (Forall "ab" (FunTy (VarTy 'a') (Forall "r" (FunTy (FunTy (VarTy 'a') (VarTy 'r')) (FunTy (FunTy (VarTy 'b') (VarTy 'r')) (VarTy 'r'))))))
+--     )
+--     ( Let
+--         "casee"
+--         ( Annot
+--             (Lam "s" (Lam "f" (Lam "g" (App (Var "s") [Var "f", Var "g"]))))
+--             (Forall "abq" (FunTy (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q'))) (FunTy (FunTy (VarTy 'a') (VarTy 'q')) (FunTy (FunTy (VarTy 'b') (VarTy 'q')) (VarTy 'q')))))
+--         )
+--         ( Let
+--             "isTrue"
+--             ( Annot
+--                 (Lam "s" (App (Var "casee") [Var "s", Lam "x" (Op Ge (Var "x") (IntExp 1)), Lam "b" (Var "b")]))
+--                 (FunTy (FunTy (FunTy IntTy BoolTy) (FunTy (FunTy BoolTy BoolTy) BoolTy)) BoolTy)
+--             )
+--             (Let "exL" (Annot (App (Var "injl") [IntExp 1]) (Forall "r" (FunTy (FunTy IntTy (VarTy 'r')) (FunTy (FunTy BoolTy (VarTy 'r')) (VarTy 'r'))))) (App (Var "isTrue") [Var "exL"]))
+--         )
+--     )
